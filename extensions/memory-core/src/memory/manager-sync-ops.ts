@@ -282,6 +282,14 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
       const needsExplicitIdentityReindex =
         params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
+      // A deliberate switch to keyword-only mode can rebuild without a provider.
+      // Other configuration changes still require an explicit reindex.
+      const needsFtsOnlyTransitionReindex =
+        this.settings.provider === "none" &&
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        (indexIdentity.code === "model" || indexIdentity.code === "provider") &&
+        !hasTargetArchiveFiles;
       // Runtime format changes need a shadow rebuild even when source hashes match.
       const needsRuntimeVersionReindex =
         indexIdentity.status === "mismatched" &&
@@ -294,6 +302,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         needsInitialIndex ||
         needsMissingIdentityReindex ||
         needsExplicitIdentityReindex ||
+        needsFtsOnlyTransitionReindex ||
         needsRuntimeVersionReindex ||
         (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
         (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);

@@ -877,6 +877,30 @@ describe("memory cli", () => {
     expectLogged(log, "Vector error: load failed");
   });
 
+  it("shows deliberate FTS-only mode without an embeddings error", async () => {
+    mockStatusManager(
+      {
+        provider: "none",
+        requestedProvider: "none",
+        model: undefined,
+        vector: { enabled: false, available: false, semanticAvailable: false },
+      },
+      {
+        probeVectorAvailability: vi.fn(async () => false),
+        probeEmbeddingAvailability: vi.fn(async () => ({
+          ok: false,
+          error: "No embedding provider available (FTS-only mode)",
+        })),
+      },
+    );
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expectLogged(log, "Embeddings: disabled (FTS-only mode)");
+    expect(loggedOutput(log)).not.toContain("Embeddings error:");
+  });
+
   it("reindexes and probes local runtime details with status --index", async () => {
     const sync = vi.fn(async () => {});
     const probeVectorStoreAvailability = vi.fn(async () => true);

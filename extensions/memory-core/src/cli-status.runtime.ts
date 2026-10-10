@@ -363,7 +363,9 @@ export async function runMemoryStatus(
         ),
       );
     }
-    if (embeddingProbe) {
+    if (requestedProvider === "none") {
+      addField("Embeddings", "disabled (FTS-only mode)", muted);
+    } else if (embeddingProbe) {
       const state =
         embeddingProbe.ok && embeddingProbe.checked === false
           ? "skipped"

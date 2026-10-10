@@ -329,3 +329,19 @@ clawtributors:hidden:end -->
 ## License
 
 [MIT](LICENSE) © OpenClaw Foundation. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for incorporated or adapted code.
+
+## StormiClaw Memory Configuration
+
+Memory is stored in workspace Markdown files and indexed in each agent's SQLite database.
+Keyword search works without embeddings. Set `memory.search.provider` to `none` for
+local FTS-only search, or configure a supported embedding provider for semantic search.
+`memory.search.enabled` controls whether memory search is enabled.
+
+Use the `openclaw` CLI to inspect or change memory settings:
+
+```bash
+openclaw memory status --agent main
+openclaw config set memory.search.provider none
+```
+
+See [memory configuration](docs/reference/memory-config.md) for provider and index details.

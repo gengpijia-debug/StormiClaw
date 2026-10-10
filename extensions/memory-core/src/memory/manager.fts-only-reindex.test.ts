@@ -541,6 +541,36 @@ describe("memory manager FTS-only reindex", () => {
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 
+  it("rebuilds a semantic index as FTS-only on the first search after provider none is selected", async () => {
+    providerAvailable = true;
+    const semanticManager = await createManager();
+    await semanticManager.sync({ reason: "test", force: true });
+    await semanticManager.close();
+    await closeAllMemorySearchManagers();
+
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta topic\n\nUpdated note.");
+    providerAvailable = false;
+    createEmbeddingProviderMock.mockClear();
+    const keywordManager = await createManager({ provider: "none" });
+
+    await expect(keywordManager.search("Beta topic")).resolves.toEqual([
+      expect.objectContaining({ path: "MEMORY.md", source: "memory" }),
+    ]);
+    expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
+    expect(keywordManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(countChunksContaining("Alpha topic")).toBe(0);
+    expect(countChunksContaining("Beta topic")).toBeGreaterThan(0);
+    const db = new DatabaseSync(indexPath);
+    try {
+      const row = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get();
+      expect(JSON.parse(String(row?.value))).toMatchObject({ provider: "none", model: "fts-only" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
     const memoryManager = await createManager({ provider: "none" });
     const db = Reflect.get(memoryManager, "db") as DatabaseSync;

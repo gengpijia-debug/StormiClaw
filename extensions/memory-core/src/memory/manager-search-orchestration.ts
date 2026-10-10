@@ -296,6 +296,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
+          (this.settings.provider === "none" &&
+            indexIdentity.status === "mismatched" &&
+            indexIdentity.owner === "configuration" &&
+            (indexIdentity.code === "model" || indexIdentity.code === "provider")) ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&

@@ -116,6 +116,8 @@ OpenClaw pauses vector search and reports an index identity warning instead of
 automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory status --index --agent <id>` or
 `openclaw memory index --force --agent <id>`.
+An explicit switch to `provider: "none"` is the exception: ordinary search or
+sync rebuilds the index as FTS-only without calling an embedding provider.
 </Warning>
 
 If an outage activates a fallback that cannot read the existing index, later
