@@ -12,11 +12,12 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
@@ -38,6 +39,8 @@ import {
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
+  withUpdateStateRead,
+  isUpdateStateReadContention,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
@@ -254,6 +257,12 @@ async function settleUpdateCommandTerminalResult<T>(
       ) {
         throw error;
       }
+      if (run && getUpdateRun(run.runId, { env: run.env })?.status === "succeeded") {
+        defaultRuntime.error(
+          `Warning: Update succeeded, but result publication failed: ${createUpdateErrorFact("update", error, run.env).message}`,
+        );
+        return exitCliAfterOutput(defaultRuntime, 0);
+      }
       outcome = {
         error:
           "error" in outcome && outcome.error !== error
@@ -293,6 +302,10 @@ async function settleUpdateCommandTerminalResult<T>(
         },
       );
     }
+  }
+  // Executor and artifact cleanup have settled; a reported exit is not a new failure report.
+  if ("error" in outcome && outcome.error instanceof ExitError) {
+    throw outcome.error;
   }
   if (run && "error" in outcome && !(outcome.error instanceof UpdateCommandFailure)) {
     const error = outcome.error;
@@ -385,11 +398,15 @@ export async function resolveSettledUpdateCommandResult(
         stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
       }
     : undefined;
+  const version = pendingResult.after?.version?.trim();
+  const recovery: UpdateRunResult["recovery"] =
+    pendingResult.recovery ?? (version ? { serviceRestartSafe: true, version } : undefined);
   const result: UpdateRunResult = failedStep
     ? {
         ...pendingResult,
         status: "error",
         reason: activationTimeout?.reason ?? "update-executor-settlement-failed",
+        recovery: isUpdateStateReadContention(failure) ? recovery : undefined,
         failedStep,
         steps: [...pendingResult.steps, failedStep],
       }
@@ -406,16 +423,24 @@ export async function resolveSettledUpdateCommandResult(
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
-    await assertUpdateRecoveryAdmission({ env, path: targetPath });
-    if (params.opts.run) {
-      if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
-        await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
-      }
-      const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
-      if (prior && prior.status !== "running" && settlementFailed) {
-        throw new Error("Update history was already finalized by another owner.");
-      }
-    }
+    await withUpdateStateRead(
+      async () => {
+        await assertUpdateRecoveryAdmission({ env, path: targetPath });
+        if (params.opts.run) {
+          if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
+            await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+          }
+          const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
+          if (prior && prior.status !== "running" && settlementFailed) {
+            throw new Error("Update history was already finalized by another owner.");
+          }
+        }
+      },
+      // This branch has no whole-run deadline; bound contention waits by the update step budget.
+      parseUpdateTimeoutMs(params.opts.timeout) ??
+        params.opts.run?.defaultStepTimeoutMs ??
+        DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    );
   } catch (cause) {
     throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), { cause });
   }
@@ -424,7 +449,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "databaseBackup" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -456,6 +481,11 @@ export async function recordUpdatePackageCompletion(
   // retention outcome as a step, so this line must not leak into machine output.
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
+  // Doctor can revoke restoration after capture. Both local and migrated
+  // finalization retire the retained parent's transaction through this boundary.
+  if (params.databaseBackup?.restoreRefusal) {
+    transaction.databaseBackupRoot = undefined;
   }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)

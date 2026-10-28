@@ -78,7 +78,8 @@ async function restoreArchivedDispatchSession(params: {
     hasPluginOwnedBinding ||
     ctx.InboundAccessAuthorized !== true ||
     ctx.InboundEventKind === "room_event" ||
-    isNativeCommandTurn(ctx.CommandTurn) ||
+    // Authorized native controls restore their own archived source in place.
+    (isNativeCommandTurn(ctx.CommandTurn) && ctx.CommandTurn?.authorized !== true) ||
     classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
   ) {
     return entry;
@@ -488,7 +489,8 @@ export function createDispatchReplyOperationCoordinator(params: {
             routeThreadId: params.routeThreadId,
           }))
       ) {
-        if (allowActiveResolution) {
+        // Gateway and low-level successors retain their own cancellation while awaiting queue admission.
+        if (allowActiveResolution && !allowGatewayQueueResolution) {
           preDispatchAbortOperation = admission.activeOperation;
         }
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;

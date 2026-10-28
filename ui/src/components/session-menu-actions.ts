@@ -3,7 +3,6 @@ import { html, nothing, type ReactiveControllerHost, type TemplateResult } from 
 import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
@@ -24,13 +23,10 @@ import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-ch
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
-
 export type SessionMenuData = {
   label: string;
   sessionId: string | null;
   isChild?: boolean;
-  hasChildren?: boolean;
   pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
@@ -61,8 +57,6 @@ const SIMPLE_SESSION_ACTIONS = [
   "fork",
   "new-group",
   "toggle-archived",
-  "archive-tree",
-  "move-to-top-level",
   "delete",
 ] as const;
 
@@ -205,17 +199,7 @@ export class SessionMenuActions {
         return batch || state.forkDisabled;
       case "move-to-group":
       case "new-group":
-        return false;
-      case "move-to-top-level":
-        return batch || !session.isChild;
-      case "archive-tree":
-        return (
-          batch ||
-          !session.hasChildren ||
-          session.archived ||
-          session.archiving === true ||
-          !state.archiveAllowed
-        );
+        return session.isChild === true;
       case "toggle-archived":
         return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
@@ -444,7 +428,6 @@ export class SessionMenuActions {
             )
           : nothing
       }
-      ${!batch && session.isChild ? this.renderItem("move-to-top-level", t("sessionsView.moveToTopLevel"), icons.arrowUpRight) : nothing}
       ${this.snoozeMenu.renderAction()}
       ${this.renderItem(
         "toggle-archived",
@@ -463,7 +446,6 @@ export class SessionMenuActions {
         session.archived ? icons.archiveRestore : icons.archive,
         { shortcut: "a" },
       )}
-      ${!batch && session.hasChildren && !session.archived ? this.renderItem("archive-tree", t("sessionsView.archiveSessionTree"), icons.archive) : nothing}
     `;
   }
 
@@ -519,6 +501,9 @@ export class SessionMenuActions {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     const count = String(state.selectionCount);
+    if (state.session.isChild === true) {
+      return nothing;
+    }
     const label = batch
       ? t("sessionsView.moveToGroupMenuCount", { count })
       : t("sessionsView.moveToGroupMenu");

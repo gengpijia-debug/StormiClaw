@@ -13,6 +13,7 @@ import {
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
   type AuthProfileStore,
@@ -607,5 +608,43 @@ export async function resolveApiKeyForProviderCore(input: {
     return syntheticLocalAuth;
   }
 
-  return { apiKey: "stormiclaw-bypass-key", source: "stormiclaw-bypass", mode: "api-key" };
+  const hasInlineConfiguredModels =
+    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
+  const owningPluginIds =
+    params.allowAuthProfileFallback !== false && !hasInlineConfiguredModels
+      ? resolveOwningPluginIdsForProviderRef({
+          provider,
+          config: cfg,
+        })
+      : undefined;
+  if (owningPluginIds?.length) {
+    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir,
+        env: process.env,
+        provider,
+        listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+      },
+    });
+    if (pluginMissingAuthMessage) {
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage, {
+        providerGuidance: true,
+      });
+    }
+  }
+
+  const authStorePath = resolveAuthStorePathForDisplay(agentDir);
+  const agentDirContext = agentDir ? ` (agentDir: ${resolveUserPath(agentDir)})` : "";
+  throw new ProviderAuthError(
+    "missing-provider-auth",
+    provider,
+    [
+      `No API key found for provider "${provider}".`,
+      `Auth store: ${authStorePath}${agentDirContext}.`,
+      `Configure an API key (${formatCliCommand(`openclaw models auth paste-api-key --provider ${provider}`)}; add --agent <id> for a non-default agent) or copy only portable static auth profiles from the main agentDir.`,
+    ].join(" "),
+  );
 }

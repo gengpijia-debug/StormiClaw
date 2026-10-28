@@ -4081,9 +4081,16 @@ esac
     ).toBe(false);
   });
 
-  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
+  it.each(
+    ["ci-android-focused-testbox.yml", "ci-check-high-memory-testbox.yml"].flatMap((workflow) =>
+      [[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]].map((refs) => ({
+        workflow,
+        refs,
+      })),
+    ),
+  )(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
-    (...refs) => {
+    ({ workflow, refs }) => {
       const { output } = runSuccessfulDefaultWrapper(
         [
           "run",
@@ -4091,7 +4098,7 @@ esac
           "blacksmith-testbox",
           ...refs,
           "--blacksmith-workflow",
-          ".github/workflows/ci-check-high-memory-testbox.yml",
+          `.github/workflows/${workflow}`,
           "--blacksmith-job",
           "check",
           "--",
@@ -4109,7 +4116,7 @@ esac
       expect(output.args.slice(0, optionEnd)).toEqual(
         expect.arrayContaining([
           "--blacksmith-workflow",
-          ".github/workflows/ci-check-high-memory-testbox.yml",
+          `.github/workflows/${workflow}`,
           "--blacksmith-job",
           "check",
         ]),
@@ -4149,6 +4156,24 @@ esac
     expect(remoteCommand).toContain(
       "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
     );
+  });
+
+  it("redacts only the Testbox caller command after materializing its source", () => {
+    for (const provider of ["blacksmith-testbox", "aws"]) {
+      const { remoteCommand } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", provider, "--", "corepack", "pnpm", "check:changed"],
+        sparseChangedGateOptions,
+      );
+      const stage = "exec node scripts/crabbox-remote-redact.mjs -- bash -c ";
+      if (provider === "blacksmith-testbox") {
+        expect(remoteCommand).toMatch(/^export CI=true; openclaw_source_root=/u);
+        expect(remoteCommand).toContain(`cd "$openclaw_source_root" || exit $?; ${stage}`);
+        expect(remoteCommand).toMatch(/-- bash -c '.*corepack pnpm check:changed'$/u);
+      } else {
+        expect(remoteCommand).toContain('"baseSha":"abc123"');
+        expect(remoteCommand).not.toContain(stage);
+      }
+    }
   });
 
   it.each(["origin/main~1", "abc123"])("rejects a non-recreatable changed-gate base %s", (base) => {
@@ -4675,6 +4700,11 @@ process.on("exit", () => {
       copyFileSync(
         path.join(origin, "scripts/check-changed.mjs"),
         path.join(origin, "scripts/source-fixture.mjs"),
+      );
+      // Real transports carry this repo's Testbox redaction stage; the synthetic source passes through.
+      writeFileSync(
+        path.join(origin, "scripts/crabbox-remote-redact.mjs"),
+        'import { spawnSync } from "node:child_process"; const [, command, ...args] = process.argv.slice(2); process.exit(spawnSync(command, args, { stdio: "inherit" }).status ?? 1);\n',
       );
       if (scenario === "captured-base") {
         writeFileSync(

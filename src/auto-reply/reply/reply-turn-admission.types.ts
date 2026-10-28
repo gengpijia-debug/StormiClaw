@@ -21,8 +21,6 @@ export type ReplyTurnAdmission =
 
 export type ReplyTurnAdmissionParams = {
   assertRequestCurrent?: () => void;
-  /** Capture caller-owned selection during admission checks, including the writer-ordered recheck. */
-  captureRunSelection?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
   sessionKey: string;

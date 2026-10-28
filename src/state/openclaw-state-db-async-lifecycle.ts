@@ -37,6 +37,12 @@ export function isStateDatabaseReadAdmissionInvalidatedError(error: unknown): bo
   return extractErrorCode(error) === STATE_DATABASE_READ_ADMISSION_INVALIDATED;
 }
 
+/**
+ * A resource close failure whose live custody outlives this process's orderly close.
+ * Reads stay sealed until process retirement instead of resuming after failed drainage.
+ */
+export class StateDatabaseCustodyRetainedError extends Error {}
+
 export type OpenClawStateDatabaseReadAdmission = {
   readonly databasePath: string;
   /** Stable across first creation and aliases; coordinates work but grants no authority. */
@@ -66,7 +72,10 @@ type IdentityRecord = {
 };
 type ReadSeal = { record?: IdentityRecord };
 type CloseAttempt = {
-  seal: ReadSeal;
+  /** Absent after failed drainage released reads; the next attempt seals again. */
+  seal?: ReadSeal;
+  /** A published replacement keeps reads sealed until this record's native handle retires. */
+  superseded?: true;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
   queue?: Set<OpenClawStateDatabaseAsyncResource>;
@@ -116,7 +125,16 @@ export function createOpenClawDatabaseMaintenanceScope(
         if (access === "read") {
           return;
         }
-        throw new Error("Database maintenance authority check cannot admit a nested effect");
+        // Function names identify the admission without exposing stack paths or arguments.
+        const callers = new Error().stack
+          ?.split("\n")
+          .slice(2, 6)
+          .flatMap((line) => line.match(/^\s+at (?:async )?([\w$.]+) \(/u)?.[1] ?? [])
+          .join(" <- ")
+          .slice(0, 160);
+        throw new Error(
+          `Database maintenance authority check cannot admit a nested effect (access=effect; caller=${callers || "unknown"})`,
+        );
       }
       checkingOwner = true;
       try {
@@ -144,6 +162,17 @@ export function createOpenClawDatabaseMaintenanceScope(
         assertDatabaseAccess(databasePath);
       } else if (parent) {
         parent.assertDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
+    },
+    assertCleanupDatabaseAccess(databasePath) {
+      assertOpen();
+      // Revoked operation authority cannot strand resources under the same physical owner.
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertCleanupDatabaseAccess(databasePath);
       } else {
         throw new Error("Database maintenance scope does not own this database");
       }
@@ -307,6 +336,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     }
     return false;
   };
+  // A failed path close keeps custody after releasing reads, so its retry still
+  // targets the identity whose native handle and resources it failed to retire.
+  const hasCloseCustody = (record: IdentityRecord) => isSealed(record) || attempts.has(record);
   const assertOpen = (record: IdentityRecord) => {
     if (isSealed(record)) {
       throw new StateDatabaseReadAdmissionInvalidatedError(
@@ -316,7 +348,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
     const record = records.get(identity.key);
-    if (!record || !identity.key.startsWith("file:") || isSealed(record)) {
+    if (!record || !identity.key.startsWith("file:") || hasCloseCustody(record)) {
       return record;
     }
     // Cold binding retires vanished paths even when another hardlink keeps the file alive.
@@ -412,8 +444,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     seals.add(held);
     return held;
   };
+  const release = (attempt: CloseAttempt) => {
+    if (attempt.seal) {
+      seals.delete(attempt.seal);
+      attempt.seal = undefined;
+    }
+  };
   const forget = (record: IdentityRecord) => {
-    if (!isSealed(record) && records.get(record.identity.key) === record) {
+    if (!hasCloseCustody(record) && records.get(record.identity.key) === record) {
       records.delete(record.identity.key);
       for (const pathname of record.paths) {
         if (recordsByPath.get(pathname) === record) {
@@ -507,7 +545,15 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
           records.set(identity.key, previous);
           record = previous;
         } else {
-          invalidate(previous);
+          const failed = attempts.get(previous);
+          if (failed) {
+            // The replaced file still has unretired native custody. Its path stays
+            // bound to that record, so reads there wait for the close retry.
+            failed.superseded = true;
+            failed.seal ??= seal(previous);
+          } else {
+            invalidate(previous);
+          }
           forget(previous);
         }
       }
@@ -579,9 +625,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         return attempt.pending;
       }
       if (!attempt) {
-        attempt = { seal: seal(record), retained: new Set() };
+        attempt = { retained: new Set() };
         attempts.set(record, attempt);
       }
+      // A retry after failed drainage seals again before draining: invalidation
+      // retires admissions captured while reads were open, and the drain below
+      // settles resources those readers entered.
+      attempt.seal ??= seal(record);
       const current = attempt;
       const pending = tail
         .then(async () => {
@@ -621,16 +671,26 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
               }),
             );
           }
+          if (
+            errors.length &&
+            !current.superseded &&
+            !errors.some((error) => error instanceof StateDatabaseCustodyRetainedError)
+          ) {
+            // Native handles were not retired, so the database stays live and
+            // reads can resume. Failed resources stay retained for the retry.
+            // Retained custody instead keeps reads sealed until process retirement.
+            release(current);
+          }
           throwSqliteLifecycleErrors(errors, "OpenClaw state resource drainage failed");
           const retired = await retireNative(record?.identity);
           attempts.delete(record);
-          seals.delete(current.seal);
+          release(current);
           if (record === undefined) {
             // A successful whole-cache retry also discharges prior failed path closes.
             for (const [key, entry] of attempts) {
               if (!entry.pending) {
                 attempts.delete(key);
-                seals.delete(entry.seal);
+                release(entry);
               }
             }
             for (const entry of records.values()) {
@@ -650,7 +710,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         () => undefined,
       );
       void pending.catch(() => {
-        // Keep the seal and failed resource custody, while allowing an explicit retry.
+        // Failed native retirement and retained custody keep their seal; other
+        // failed drainage released it above.
+        // Both keep failed resource custody for an explicit retry.
         current.pending = undefined;
       });
       return pending;

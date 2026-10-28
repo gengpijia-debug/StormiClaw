@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -321,16 +321,8 @@ async function updateFinalizeCommandInternal(
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
-  const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
-    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...new Set([...doctorWarnings, ...warnings]),
-    ]);
-    for (const warning of doctorWarnings) {
-      if (!doctorWarningTimes.has(warning)) {
-        doctorWarningTimes.set(warning, Date.now());
-      }
-    }
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
     lifecycle.recordWarnings(doctorWarnings);
   };
 
@@ -433,15 +425,19 @@ async function updateFinalizeCommandInternal(
           pluginUpdate: initialPluginUpdate,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
         });
-        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        // Post-plugin convergence rereads the ledger and reports each still-pending
+        // migration as a plugin warning; that final report supersedes Doctor's.
+        const finallyReportedPluginIds = new Set(
+          (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
+            warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+          ),
+        );
+        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
+          doctorWarnings,
+          finallyReportedPluginIds,
+        );
         phase.assertCurrent();
-        doctorWarnings = doctorWarnings.filter((warning) => {
-          const completedAtMs = resolvedWarnings.get(warning);
-          return (
-            completedAtMs === undefined ||
-            completedAtMs < (doctorWarningTimes.get(warning) ?? Infinity)
-          );
-        });
+        lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

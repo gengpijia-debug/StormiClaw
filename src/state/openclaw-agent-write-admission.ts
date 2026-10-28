@@ -6,6 +6,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../logging/logger.js";
+import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
 import {
   isActiveStoreWriter,
   runQueuedStoreWrite,
@@ -160,13 +161,27 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   signal?.throwIfAborted();
-  const selected = new Map(
-    options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
-  );
-  const paths = [...selected.keys()].toSorted();
+  let selected = new Map(options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]));
   const inherited = [...admission.queues.keys()].filter((pathname) =>
     isActiveStoreWriter(admission.queues, pathname),
   );
+  if (selected.size > 1) {
+    const physicalKey = (pathname: string) => {
+      const identity = readDatabasePathIdentitySync(pathname);
+      return `${identity.key}:${identity.birthtime ?? ""}`;
+    };
+    // Borrow the held queue's spelling when multiple locators name the same file.
+    const representatives = new Map(inherited.map((pathname) => [physicalKey(pathname), pathname]));
+    const physical = new Map<string, OpenClawAgentDatabaseOptions>();
+    for (const [pathname, option] of selected) {
+      const identity = physicalKey(pathname);
+      const representative = representatives.get(identity) ?? pathname;
+      representatives.set(identity, representative);
+      physical.set(representative, { ...option, path: representative });
+    }
+    selected = physical;
+  }
+  const paths = [...selected.keys()].toSorted();
   // A nested reader may share one foreground FIFO, never a reserved worker transaction.
   if (
     paths.some(
@@ -180,19 +195,12 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");
   }
-  const acquire = (index: number): Promise<T> => {
+  return await runStoreWriterAcquisitions((index, next) => {
     const pathname = paths[index];
     return pathname === undefined
       ? Promise.resolve().then(run)
       : observeWriteAdmission("ordered-read", undefined, (timing) =>
-          runOpenClawAgentWriteAdmission(
-            selected.get(pathname)!,
-            () => acquire(index + 1),
-            true,
-            timing,
-            signal,
-          ),
+          runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
         );
-  };
-  return await acquire(0);
+  });
 }

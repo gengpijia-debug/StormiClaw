@@ -444,6 +444,8 @@ type CliBackendPluginBase = {
     modelDisplay: string;
     agentId?: string;
     systemPrompt: string;
+    /** Short IDs of OpenClaw MCP tools exposed to this invocation after policy filtering. */
+    openClawMcpToolNames?: readonly string[];
   }) => string | null | undefined;
   /**
    * Backend-owned bidirectional text replacements.
@@ -507,6 +509,17 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /**
+   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
+   * otherwise expose no native tools. Core applies the same list to ordinary and
+   * verified completion turns, so return only tools that confer no capability
+   * through `projectNativeToolAuthority`; caller caps, restricted senders,
+   * and workspace-only runs still receive none.
+   */
+  resolveManagedNativeTools?: (ctx: {
+    config?: OpenClawConfig;
+    agentId: string;
+  }) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *

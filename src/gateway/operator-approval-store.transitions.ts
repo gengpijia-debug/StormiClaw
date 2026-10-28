@@ -7,7 +7,6 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.js";
 import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
-import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   requireApprovalId,
@@ -117,7 +116,6 @@ export function resolveOperatorApprovalInDatabase(params: {
     }
     record = requireDecodedRecord(row);
     if (result.numAffectedRows === 1n) {
-      operatorApprovalPublication.stagePostimages(database.db, [row]);
       if (
         params.decision === "allow-always" &&
         params.mcpToolGrant &&
@@ -232,7 +230,6 @@ export function forceDenyOperatorApprovalInDatabase(params: {
     if (!terminalRow) {
       return { outcome: "not-found" };
     }
-    operatorApprovalPublication.stagePostimages(database.db, [terminalRow]);
     return { outcome: "denied", record: requireDecodedRecord(terminalRow) };
   }, params.databaseOptions);
 }
@@ -264,12 +261,10 @@ export function expireDueOperatorApprovalsInDatabase(params: {
         .updateTable("operator_approvals")
         .set(terminalFields)
         .where("status", "=", "pending")
-        .where("expires_at_ms", "<=", nowMs)
-        .returningAll(),
+        .where("expires_at_ms", "<=", nowMs),
     );
-    operatorApprovalPublication.stagePostimages(database.db, result.rows);
     return {
-      affected: result.rows.length,
+      affected: Number(result.numAffectedRows ?? 0n),
       records: dueRows
         .map((row) => decodeOperatorApprovalRow({ ...row, ...terminalFields }))
         .filter((record): record is OperatorApprovalRecord => record !== null),
@@ -322,7 +317,6 @@ export function closeOrphanedOperatorApprovals(params: {
         terminalRows.push({ ...row, ...terminalFields });
       }
     }
-    operatorApprovalPublication.stagePostimages(database.db, terminalRows);
     return {
       affected,
       records: terminalRows
@@ -418,7 +412,6 @@ export function consumeOperatorApprovalAllowOnceInDatabase(params: {
     }
     record = requireDecodedRecord(row);
     if (result.numAffectedRows === 1n) {
-      operatorApprovalPublication.stagePostimages(database.db, [row]);
       return { outcome: "consumed", record };
     }
     if (
@@ -451,13 +444,8 @@ export function pruneTerminalOperatorApprovals(params: {
         .deleteFrom("operator_approvals")
         .where("status", "!=", "pending")
         .where("resolved_at_ms", "is not", null)
-        .where("resolved_at_ms", "<=", cutoffMs)
-        .returning("approval_id"),
+        .where("resolved_at_ms", "<=", cutoffMs),
     );
-    operatorApprovalPublication.stageDeletions(
-      database.db,
-      result.rows.map((row) => row.approval_id),
-    );
-    return result.rows.length;
+    return Number(result.numAffectedRows ?? 0n);
   }, params.databaseOptions);
 }

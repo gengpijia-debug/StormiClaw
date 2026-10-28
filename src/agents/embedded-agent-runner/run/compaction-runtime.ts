@@ -1,7 +1,6 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -92,6 +91,13 @@ export async function compactEmbeddedRunForRecovery(
   const { runParams } = input;
   const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    requestAdmission.storePath === activeSession.target?.storePath
+      ? requestAdmission.entryId
+      : undefined;
   const promptCacheIdentity = {
     ...runParams,
     sessionId: activeSession.id,
@@ -181,6 +187,7 @@ export async function compactEmbeddedRunForRecovery(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager
@@ -284,11 +291,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
       ? params.sessionManager
       : undefined;
   const detached = params.sessionPersistence === "detached";
-  const initialTarget = sessionPromptState.sessionTarget;
-  const incognito =
-    !memoryManager && !detached && initialTarget
-      ? captureIncognitoSessionSource(initialTarget)
-      : undefined;
   const assertAdmittedActive = composeSessionSourceAssertion(
     [admittedAssertion],
     (assertSource) => {
@@ -309,28 +311,14 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (memoryManager || detached) {
       return;
     }
-    incognito?.admissionSignal?.throwIfAborted();
-    if (incognito && "kind" in incognito) {
-      incognito.assertCurrent();
-    }
-    if (
-      incognito &&
-      (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
-    ) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
     const entry =
       target?.sessionKey && target.storePath
-        ? incognito
-          ? "kind" in incognito
-            ? undefined
-            : incognito.actor.sessions.readSharing(target.sessionKey)?.entry
-          : loadSessionEntry({
-              agentId: target.agentId,
-              sessionKey: target.sessionKey,
-              storePath: target.storePath,
-              readConsistency: "latest",
-            })
+        ? loadSessionEntry({
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+            readConsistency: "latest",
+          })
         : undefined;
     if (
       !writerFence ||

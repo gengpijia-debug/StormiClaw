@@ -84,8 +84,12 @@ export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
   return launch && !launch.ownSession ? launch.label : undefined;
 }
 
+/** The children the Subagents panel lists. A swarm's workers report through its own progress. */
 export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
-  return row.classification === "subagent" || isSubagentSessionKey(row.key);
+  return (
+    (row.classification === "subagent" || isSubagentSessionKey(row.key)) &&
+    !row.swarmGroupId?.trim()
+  );
 }
 
 /** A subagent that handed off to its own subagents is still at work. */

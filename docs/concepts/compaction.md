@@ -104,6 +104,10 @@ Automatic session title generation runs in the background and does not block man
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
+The session's per-model `contextTokens` cap does not shrink the summarization
+model's native `contextWindow`. A small active-input budget still applies to
+normal turns, while the summarizer uses its own window to read older history.
+
 When the built-in OpenClaw runtime has prepared the foreground request,
 client-side automatic compaction also accounts for its system prompt, tool
 schemas, pending input, and output reserve when choosing the retained tail.
@@ -184,6 +188,10 @@ essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Native compaction that leaves the host transcript unchanged preserves retry
+suppression. Host compaction clears or refreshes it; changing the session or
+limit, falling below the limit, or growing by another full threshold also rearms
+the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and

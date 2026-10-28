@@ -153,12 +153,20 @@ const runtimeConsumers = [
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "runtime" as const,
     dir: "src/agents",
   })),
+  {
+    // Its cold catalog worker imports the bundled provider's built public SDK.
+    file: "src/agents/clawrouter-catalog-discovery.e2e.test.ts",
+    configs: ["test/vitest/vitest.e2e.config.ts"],
+    mode: "runtime",
+    dir: "src/agents",
+  },
   {
     file: "src/plugins/plugin-module-generation.sdk.test.ts",
     configs: ["test/vitest/vitest.plugins.config.ts"],

@@ -1,4 +1,5 @@
 import { fork } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   UPDATE_RUN_DRIVER_LIMIT,
@@ -398,6 +399,26 @@ describe("update run ledger", () => {
       }
     },
   );
+  it("confirms channel-only outages without inheriting a stale core proof", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const facts = {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      pluginErrors: [],
+      readyz: false,
+      channelsReady: false,
+    };
+    expect(recordUpdateRunVerification(run.runId, facts, options).confirmedAtMs).toBeNull();
+    recordUpdateRunVerification(run.runId, { ...facts, coreReady: true }, options);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      confirmedAtMs: expect.any(Number),
+      verification: { ...facts, coreReady: true },
+    });
+  });
+
   it("keeps a terminal result unchanged for running-only boot observations", () => {
     const status = "failed";
     const options = isolatedOptions();
@@ -647,13 +668,16 @@ describe("update run ledger", () => {
       let saved = createUpdateRun({ trigger: "cli" }, options);
       expect(() => {
         for (let index = 0; index < 130; index++) {
-          saved = recordUpdateRunStep(
-            saved.runId,
-            {
-              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
-              status: "completed",
-            },
-            options,
+          saved = expectDefined(
+            recordUpdateRunStep(
+              saved.runId,
+              {
+                step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+                status: "completed",
+              },
+              options,
+            ),
+            "required finalization receipt",
           );
         }
       }).toThrow(/retained step.*limit/);

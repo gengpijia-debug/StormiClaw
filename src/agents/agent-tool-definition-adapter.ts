@@ -36,6 +36,7 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -257,10 +258,14 @@ async function executeAdaptedToolOperation(params: {
     logError(
       `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
     );
-    return buildToolExecutionErrorResult({
+    const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
     });
+    // Error presentation must preserve private execution and content provenance.
+    return typeof err === "object" && err !== null
+      ? copyInternalToolResultState(err, result)
+      : result;
   }
 }
 

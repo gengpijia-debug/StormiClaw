@@ -3,20 +3,14 @@ import { buildAgentMainSessionKey } from "@openclaw/session-url-contract";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { SessionEntry } from "./types.js";
 
-// Pins are sidebar-root facts; promotion does not change execution lineage.
+// Pins are root-session facts; children live in their parent's tree.
 // Durable dashboard sessions auto-parent to the agent main root for flow-up
 // notices and sidebar threads; that lineage does not make them nested children.
 export function isPinnableSessionEntry(
   storeKey: string,
-  entry: Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "sidebarRoot"> | undefined,
+  entry: Pick<SessionEntry, "spawnedBy" | "parentSessionKey"> | undefined,
 ): boolean {
-  if (isSubagentSessionKey(storeKey)) {
-    return false;
-  }
-  if (entry?.sidebarRoot === true) {
-    return true;
-  }
-  if (normalizeOptionalString(entry?.spawnedBy)) {
+  if (isSubagentSessionKey(storeKey) || normalizeOptionalString(entry?.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(entry?.parentSessionKey);

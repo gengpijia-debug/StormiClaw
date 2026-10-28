@@ -27,6 +27,13 @@ import {
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
+  filterPreparedProviderCatalog,
+  mergePreparedModelCatalogInventory,
+  mergePreparedNativeCatalog,
+  prepareModelCatalogPublication,
+  retainPreparedModelCatalogPublication,
+} from "./prepared-model-runtime.catalog-publication.js";
+import {
   preparedProviderCatalogCredentials,
   prepareRetainedProviderCatalog,
 } from "./prepared-model-runtime.catalog-source.js";
@@ -38,13 +45,8 @@ import {
 } from "./prepared-model-runtime.facts.js";
 import {
   type PreparedModelRuntimeCatalogAccess,
-  filterPreparedProviderCatalog,
-  mergePreparedModelCatalogInventory,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
-  mergePreparedNativeCatalog,
-  prepareModelCatalogPublication,
-  retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -110,10 +112,8 @@ export async function createFullModelCatalogAccess(
       params.isCurrent() ? readUsage(store) : store,
     );
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
-  const project = (
-    catalog: ModelCatalogSnapshot,
-    configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
-  ) => attempt.withRefreshStatus(projectInventory(catalog, configuredRuntimeModels));
+  const project = (...args: Parameters<typeof projectInventory>) =>
+    attempt.withRefreshStatus(projectInventory(...args));
   const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
   const nativeSource = fingerprintPreparedRuntimeFacts({
     runtimePluginSelections: params.agentFacts.input.runtimePluginSelections,
@@ -138,13 +138,14 @@ export async function createFullModelCatalogAccess(
     },
     params.isPublished,
   );
-  const { providerSource, providerSources, retainedInventory } = prepareRetainedProviderCatalog(
-    params,
-    normalizeProvider,
-    eligibleProviders,
-    pluginFingerprint,
-    nativeSource,
-  );
+  const { providerSource, retainedInventory, listChangedProviders } =
+    prepareRetainedProviderCatalog(
+      params,
+      normalizeProvider,
+      eligibleProviders,
+      pluginFingerprint,
+      nativeSource,
+    );
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
@@ -184,7 +185,7 @@ export async function createFullModelCatalogAccess(
       retirementSignal: params.retirementSignal,
     }),
   );
-  const staticCatalog = project(params.catalogFacts.modelCatalog);
+  const staticCatalog = project({ catalog: params.catalogFacts.modelCatalog });
   if (hasNativeCatalog) {
     staticCatalog.authoritative = false;
   }
@@ -194,10 +195,9 @@ export async function createFullModelCatalogAccess(
     configuredRuntimeModels: Publication["configuredRuntimeModels"],
     acquiredNative: boolean,
   ): Publication => {
-    const catalog = project(nextInventory.catalog, configuredRuntimeModels);
+    const catalog = project(nextInventory, configuredRuntimeModels);
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
-    catalog.authoritative =
-      acquiredNative && !catalog.refreshFailed ? catalog.authoritative : false;
+    catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
     if (
       acquiredNative &&
       eligibleProviders.every((provider) => nextInventory.providers.has(provider))
@@ -456,7 +456,13 @@ export async function createFullModelCatalogAccess(
         throw failures[0]!.error;
       }
       if (!params.isCurrent()) {
-        const catalog = projectInventory(rawCatalog, params.catalogFacts.configuredRuntimeModels);
+        const catalog = projectInventory(
+          {
+            catalog: rawCatalog,
+            discoveryOrigins: capturedCatalog?.acceptedDiscoveryOrigins ?? [],
+          },
+          params.catalogFacts.configuredRuntimeModels,
+        );
         setCatalogAuth(
           catalog,
           getPreparedModelFullCatalogAuth(capturedCatalog ?? staticCatalog) ?? currentAuth,
@@ -603,20 +609,11 @@ export async function createFullModelCatalogAccess(
       return published.catalog;
     }
     const requestedProviders = [
-      ...new Set(
-        (
-          options.providerIds ??
-          (options.changedOnly ? Object.keys(params.agentFacts.credentials) : eligibleProviders)
-        ).map(normalizeProvider),
-      ),
+      ...new Set((options.providerIds ?? eligibleProviders).map(normalizeProvider)),
     ];
-    const providers = requestedProviders.filter(
-      (provider) =>
-        !options.changedOnly ||
-        published.inventory?.providers.get(provider)?.source !== providerSources.get(provider) ||
-        published.inventory?.providers.get(provider)?.credentials !==
-          preparedProviderCatalogCredentials(params.agentFacts, provider, normalizeProvider),
-    );
+    const providers = options.changedOnly
+      ? listChangedProviders(published.inventory, options.providerIds)
+      : requestedProviders;
     // A changed-only pass without provider inventory is a cold start: acquire what a refresh
     // would, including hosted rows for providers without credentials.
     const fullRefresh =

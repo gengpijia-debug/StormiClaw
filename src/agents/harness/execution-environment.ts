@@ -1,7 +1,6 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -181,30 +180,17 @@ export function assertAgentHarnessExecutionEnvironment(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const source = params.sessionKey
-    ? captureIncognitoSessionSource({
-        agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.config?.session?.store
-          ? resolveSessionStorePathCore(params.config.session.store, { agentId })
-          : undefined,
-      })
+  const entry = params.sessionKey
+    ? resolveSessionEntry(
+        {
+          agentId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, { agentId }),
+          clone: false,
+        },
+        { readOnly: true },
+      ).existing
     : undefined;
-  const entry = source
-    ? "kind" in source
-      ? undefined
-      : source.actor.sessions.readPolicy(params.sessionKey!)
-    : params.sessionKey
-      ? resolveSessionEntry(
-          {
-            agentId,
-            sessionKey: params.sessionKey,
-            storePath: resolveSessionStorePathCore(params.config?.session?.store, { agentId }),
-            clone: false,
-          },
-          { readOnly: true },
-        ).existing
-      : undefined;
   // Consent belongs to this incarnation, never a parent or classification session.
   const nativeRuntimeConsent =
     entry?.sessionId === params.sessionId &&
@@ -232,7 +218,6 @@ export function assertAgentHarnessExecutionEnvironment(
     agentId: runtime.classificationAgentId,
     sessionKey: params.sessionKey,
     execOverrides: params.execOverrides,
-    sessionEntry: source ? entry : undefined,
   });
   const restriction = resolveAgentHarnessExecutionRestriction(harness, {
     sandboxed: params.sandbox?.enabled === true || runtime.sandboxed || exec.host === "sandbox",
@@ -245,10 +230,7 @@ export function assertAgentHarnessExecutionEnvironment(
         cfg: params.config,
         agentId: runtime.classificationAgentId,
       }),
-    permissionMode:
-      source && params.permissionMode === "full" && entry?.sessionId === params.sessionId
-        ? (entry.permissionMode ?? params.permissionMode)
-        : params.permissionMode,
+    permissionMode: params.permissionMode,
     remoteExecution: exec.host === "node",
   });
   if (restriction) {
@@ -309,7 +291,6 @@ export type ResolvedPluginHarnessToolPolicies = {
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
-  requiresLiveToolAuthority: boolean;
   toolPolicyRestricted: boolean;
 };
 
@@ -466,12 +447,9 @@ export function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
-    requiresLiveToolAuthority: Boolean(policy.delegatedToolPolicy),
     // Native tools bypass the collector's noninteractive OpenClaw wrappers.
     // Keep policy-allowed host replacements, without ambient input or approval surfaces.
     toolPolicyRestricted:
-      // Delegated tools require OpenClaw’s live pre-effect grant checks.
-      Boolean(policy.delegatedToolPolicy) ||
       params.swarmCollector === true ||
       nativeToolNames?.some((toolName) => !isToolAllowedByPolicies(toolName, profilePolicies)) ===
         true ||

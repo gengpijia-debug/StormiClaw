@@ -54,7 +54,6 @@ const message: AssistantMessage = {
 const config = { model, convertToLlm: () => [user] };
 const noTools = async () => ({
   messages: [],
-  terminalToolCallIds: [],
   steeringMessages: [],
   terminate: false,
   terminateRun: false,

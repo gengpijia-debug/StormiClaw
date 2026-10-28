@@ -29,10 +29,6 @@ import {
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
 import {
-  execApprovalsPublication,
-  type ExecApprovalsPublicationValue,
-} from "./exec-approvals-publication.js";
-import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
@@ -185,39 +181,28 @@ describe("exec approvals SQLite store", () => {
 
   it("rolls back a policy replacement when current authority ends before commit", async () => {
     const before = await ensureExecApprovalsSnapshot();
-    const unknown = vi.fn();
-    const release = execApprovalsPublication.subscribeFacts((change) => {
-      if (change.kind === "unknown") {
-        unknown();
+    let current = true;
+    let commitObserved = false;
+    workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        commitObserved = true;
+        current = false;
       }
+      admit(request, grant);
     });
-    try {
-      let current = true;
-      let commitObserved = false;
-      workerProbe.admission(workerAdmission, (request, grant, admit) => {
-        if (request.stage === "commit") {
-          commitObserved = true;
-          current = false;
-        }
-        admit(request, grant);
-      });
-      await expect(
-        updateExecApprovals({
-          baseHash: before.hash,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("request authority ended");
-            }
-          },
-          update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
-        }),
-      ).rejects.toThrow("request authority ended");
-      expect(commitObserved).toBe(true);
-      expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
-      expect(unknown).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("request authority ended");
+          }
+        },
+        update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
+      }),
+    ).rejects.toThrow("request authority ended");
+    expect(commitObserved).toBe(true);
+    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
   });
 
   it("mints one socket token and reuses it on later initialization", async () => {
@@ -571,15 +556,6 @@ describe("exec approvals SQLite store", () => {
     // Admit the final reader before checking the warmed write path for caller SQL.
     prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext());
     const sql = observeMainThreadSql();
-    const publications: ExecApprovalsPublicationValue[] = [];
-    const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {
-      if (change.kind === "committed") {
-        const fact = change.receipt.facts.get("current");
-        if (fact?.kind === "postimage") {
-          publications.push(fact.value);
-        }
-      }
-    });
     try {
       const [before, denied, after] = await Promise.allSettled([
         commitExecAuthorizationLocked(input),
@@ -604,14 +580,8 @@ describe("exec approvals SQLite store", () => {
         status: "rejected",
         reason: expect.objectContaining({ message: "Exec approval changed before execution" }),
       });
-      expect(publications.map((publication) => publication.change)).toEqual(["usage", "policy"]);
-      expect(publications[0]?.file.agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe(
-        "echo before",
-      );
-      expect(publications[1]?.file.agents?.["*"]?.security).toBe("deny");
       sql.expectIdle();
     } finally {
-      releaseFacts();
       sql.restore();
     }
     expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo before");

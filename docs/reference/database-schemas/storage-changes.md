@@ -1202,7 +1202,11 @@ while replacement workers inherit the completed decision.
 Failed replies and cancelled tasks retire their exact worker without stopping
 unrelated reads. Whole-cache close drains accepted resources, including any remaining
 avatar settlement reads, before retiring the shared pool. A failed resource drain
-retains that pool for canonical cleanup retry. Path-specific close drains only
+retains that pool for canonical cleanup retry. Native handles stay open, so the
+close releases its read seal; each retry seals reads again before draining.
+A failed native retirement keeps the seal, and so do a replacement file
+published at that path before the retry and a resource whose failure retains
+custody until process retirement. Path-specific close drains only
 operations admitted for that database.
 A best-effort quarantine read preserves the domain result, but unconfirmed
 quarantine reader cleanup also requires worker retirement before source release.
@@ -1944,15 +1948,21 @@ adopts newly established integrity verification only after operation cleanup and
 while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
 
-Pressure sweeps and explicit deletion reuse one archive worker within their operation
-scope. The shared archive queue admits each materialization or publication separately;
+Pressure sweeps and explicit deletion reuse one archive worker across successful operation
+scopes. The shared archive queue admits each materialization or publication separately;
 every request opens a fresh read-only database and closes its database and file handles
 before acknowledging completion. No archive database connection or lease survives
 between requests. Each victim still commits and publishes before the next victim is
 deleted. A preparation or publication failure retires the worker and joins its native
-exit before returning the existing error. Scope completion and database retirement
-revoke queued requests, drain dispatched work, and join native exit. The process keeps
-at most one reusable archive worker; competing scopes retire the previous idle worker.
+exit before returning the existing error. Scope completion refuses further work under
+that scope while retaining a healthy idle worker. Database retirement revokes queued
+requests, drains dispatched work, and joins native exit. The process keeps at most one
+reusable archive worker; scopes in the same state directory transfer it with fresh
+authority. Different state directories and unhealthy workers require native exit
+before replacement. Five minutes without archive work retires the idle worker and
+releases its loaded heap. Only actual work renews that deadline; empty scope
+preparation does not. Admission racing retirement joins native exit before creating
+a replacement, and an open archive scope remains usable afterward.
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
 
@@ -2213,13 +2223,17 @@ Device pairing lists and lookups execute in the shared-state read-only workers.
 The pairing snapshot cache checks SQLite `data_version` there, including commits
 from a separate CLI connection. Workers project lists and node identity bindings;
 the Gateway installs bindings against the pairing revision without reopening
-SQLite. Historical inspection snapshots never publish live node authority.
+SQLite. A lookup or receipt at a newer revision marks the published set incomplete
+but keeps other devices' bindings; only a full list replaces the set.
+Historical inspection snapshots never publish live node authority.
 
 Pairing, approval, role-token, bootstrap, and node-surface mutations execute in
 the shared-state writer. Each synchronous transaction reads the authoritative
 rows and obtains current host policy or connection admission before mutation and
 again before commit. Commit receipts publish the revision and changed node
-bindings before callers continue; uncertain outcomes are not replayed. Node
+bindings before callers continue; uncertain outcomes are not replayed. Pending
+mutations leave published bindings usable because stored rows stay authoritative
+until commit and the next binding read installs the committed receipt. Node
 prompt preparation refreshes the published facts, and Web Push retains pairing
 and subscription admission through network start, releasing both before provider
 completion. APNs registration checks pairing in its worker transaction and

@@ -80,9 +80,6 @@ async function workerClaim(name: string) {
 
 function losePlacementReply(sessionId: string, outcome: "committed" | "unknown") {
   if (outcome === "unknown") {
-    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-      () => {},
-    );
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
       (admit, attachment) => {

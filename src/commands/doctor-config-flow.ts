@@ -17,6 +17,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
+import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
@@ -67,6 +68,8 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  retiredStateAdmitted?: boolean;
+  stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
@@ -81,6 +84,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     },
     (progress) =>
       runDoctorConfigPreflight({
+        retiredStateAdmitted: params.retiredStateAdmitted,
+        stateSchemaPreparation: params.stateSchemaPreparation,
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
@@ -115,6 +120,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
     // Filesystem/install repairs replace the authoritative plugin generation.
+    delete configResult.preflightLegacyStateConfig;
     pluginMetadataSnapshotState.current = undefined;
     pluginMetadataSnapshotScope.invalidate();
   };
@@ -141,7 +147,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,
@@ -491,6 +497,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -620,7 +627,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
 
-  return {
+  const configResult = {
     ...finalized,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
@@ -661,4 +668,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,
   };
+  return configResult;
 }

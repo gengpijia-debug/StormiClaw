@@ -58,6 +58,12 @@ confirm application, the key remains saved and the response includes a restart
 warning. This preserves the configured reload policy, including disabled reloads.
 Removing a key still rejects a binding or credential that changed concurrently.
 
+Provider `apiKey` values that name an existing compatible API-key or token profile
+are profile bindings, not literal credentials. Model discovery resolves those
+bindings through the same profile classification used by chat requests, including
+provider and base-URL compatibility checks. Values that do not name a stored
+profile remain literal keys. Saving a key does not change the stored binding format.
+
 ## Setup replacements
 
 Setup replacement credentials are saved under separate profile IDs with an
@@ -85,6 +91,8 @@ and first-run noninteractive setup retain their existing behavior.
 ## Agent copy portability
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
+
+When `agents.defaults.authInheritance.agentId` names another agent, Doctor relocates that agent's credentials if `main` has none. If both stores contain credentials, Doctor leaves both untouched and reports a recoverable warning: keep the credentials agents should share in one store, then rerun `openclaw doctor --fix`. Agent-private credentials stay local. This repair applies during relocation; it does not change stores that have already completed the shared-state cutover.
 
 OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
 
@@ -204,6 +212,18 @@ its marker and inherits the shared credential only after verifying that the
 shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
+
+Catalog discovery fences and settles historical peers through the same
+request-owned native writer as the refreshing credential. Each peer update
+retains its captured database file identity and compares the credential inside
+the write transaction. An identity-bound read skips definitely unrelated refresh
+generations before write admission, so empty retained stores from completed agent
+deletions do not block a shared-store refresh. Matching generations still require
+write admission and remain blocked by completed deletion. Unreadable or
+identity-replaced stores fail closed.
+If peer fencing fails before the provider refresh starts, claimed credentials
+are restored. Once the provider request starts, failed refreshes remain terminal
+because the provider may already have consumed the old refresh token.
 
 ## Plugin SDK OAuth validation
 

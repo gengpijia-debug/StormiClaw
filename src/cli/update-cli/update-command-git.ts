@@ -19,7 +19,6 @@ import {
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
 import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
   createGlobalInstallEnv,
@@ -49,6 +48,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
 } from "../../infra/update-runner-types.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -134,12 +134,10 @@ export async function retireStandaloneGitWrapper(params: {
     if (!matchesWindows && !matchesPosix) {
       continue;
     }
+    await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
+      wrapperPath,
+    );
     try {
-      if (process.platform === "freebsd") {
-        await createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
-          wrapperPath,
-        );
-      }
       // Filesystem and pkg reads can outlive this wrapper or the update's authority.
       const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
       const current = await fs.lstat(wrapperPath);
@@ -151,7 +149,12 @@ export async function retireStandaloneGitWrapper(params: {
       ) {
         throw new Error("The installer wrapper changed before retirement.");
       }
-      params.assertCurrent?.();
+    } catch (error) {
+      return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
+    }
+    // Ownership refusals must remain errors, never optional filesystem warnings.
+    params.assertCurrent?.();
+    try {
       await fs.unlink(wrapperPath);
     } catch (error) {
       return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
@@ -425,9 +428,8 @@ export async function updateGitInstall(params: {
   const assertCurrent = params.assertCurrent;
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-  const pkgOwnership = createFreeBsdPkgOwnershipInspection(effectiveTimeout);
+  const pkgOwnership = createSystemPackageOwnershipInspection(effectiveTimeout);
   await pkgOwnership.assertUnowned(updateRoot);
-  const installEnv = await createGlobalInstallEnv();
   const installTarget = params.switchToGit
     ? await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
@@ -442,6 +444,7 @@ export async function updateGitInstall(params: {
         pkgOwnership,
       })
     : null;
+  const installEnv = await createGlobalInstallEnv(undefined, installTarget ?? {});
   const npmLifecycleGate = installTarget
     ? resolveNpmLifecyclePolicyGate(installTarget)
     : { policy: null, error: null };
@@ -535,16 +538,11 @@ export async function updateGitInstall(params: {
         progress: params.progress,
         channel: params.channel,
         devTarget: params.devTarget,
-        beforeGitMutation:
-          process.platform === "freebsd"
-            ? async (target) => {
-                await params.beforeGitMutation(target);
-                await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(
-                  updateRoot,
-                );
-                params.assertCurrent?.();
-              }
-            : params.beforeGitMutation,
+        beforeGitMutation: async (target) => {
+          await params.beforeGitMutation(target);
+          await createSystemPackageOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
+          params.assertCurrent?.();
+        },
         inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
         beforeGitStaging: params.switchToGit
           ? undefined
@@ -599,7 +597,9 @@ export async function updateGitInstall(params: {
             // Exposure must use the clone owner's pinned destination, not a
             // caller alias that transport may have retargeted meanwhile.
             updateRoot = targetRoot;
-            await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
+            await createSystemPackageOwnershipInspection(effectiveTimeout).assertUnowned(
+              updateRoot,
+            );
             stagedUpdateResult = await runUpdate(stagingRoot, publish, storageRoot);
             if (stagedUpdateResult.root === stagingRoot) {
               stagedUpdateResult = {

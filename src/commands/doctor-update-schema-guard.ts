@@ -163,6 +163,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
   /** Read-only pre-capture publication check; never authorizes an agent repair. */
   statePublicationOnly?: boolean;
+  preserveSourceArtifacts?: true;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
@@ -174,9 +175,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     : createDoctorRehearsalDatabaseCoverage(process.env);
   const schemas =
     options.schemas ??
-    (await prepareDoctorDatabasePreflight(
-      options.statePublicationOnly ? { scope: "state" } : undefined,
-    ));
+    (await prepareDoctorDatabasePreflight({
+      scope: options.statePublicationOnly ? "state" : undefined,
+      preserveSourceArtifacts: options.preserveSourceArtifacts,
+    }));
   rehearsal?.assertCurrent();
   if (!schemas.pendingMigrations?.length) {
     return schemas;
@@ -207,12 +209,22 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   if (!updater) {
     return schemas;
   }
+  const earlyPackageDoctor =
+    updater.earlyDoctorRunning &&
+    !updater.postCoreStarted &&
+    isUpdatePackageSwapInProgress(process.env) &&
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE === "1" &&
+    process.env[POST_CORE_UPDATE_ENV] !== "1" &&
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART === "1" &&
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR === "0" &&
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION === "0" &&
+    process.env.OPENCLAW_SERVICE_REPAIR_POLICY === "external";
   const blockedMigrations = schemas.pendingMigrations.filter((database) =>
     updater.requiresReadableSharedContent
       ? database.kind === "state" && database.supportedVersion > 17
       : database.kind === "agent"
         ? !options.statePublicationOnly && !rehearsal?.excludes(database.path)
-        : !updater.canDeferStateSchema,
+        : !updater.canDeferStateSchema || earlyPackageDoctor,
   );
   rehearsal?.assertCurrent();
   if (blockedMigrations.length === 0) {
@@ -227,12 +239,17 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     ? postCoreRecovery
     : await resolveUpdateDoctorGitRecovery();
   rehearsal?.assertCurrent();
-  if (updater.canDeferStateSchema && blockedMigrations.every((entry) => entry.kind === "agent")) {
+  if (
+    updater.canDeferStateSchema &&
+    (earlyPackageDoctor || blockedMigrations.every((entry) => entry.kind === "agent"))
+  ) {
     const capturePending = () =>
-      blockedMigrations.map((database) => ({
-        database,
-        identity: statSync(database.path),
-      }));
+      blockedMigrations
+        .filter((database) => database.kind === "agent")
+        .map((database) => ({
+          database,
+          identity: statSync(database.path),
+        }));
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
         targetVersion: VERSION,
@@ -347,19 +364,9 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       return schemas;
     }
     // 2026.9.2 invokes this Doctor before discarding its package rollback.
-    // Returning a rehearsal decision prevents every subsequent live Doctor writer.
-    if (
-      !recovery &&
-      updater.earlyDoctorRunning &&
-      !updater.postCoreStarted &&
-      isUpdatePackageSwapInProgress(process.env) &&
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE === "1" &&
-      process.env[POST_CORE_UPDATE_ENV] !== "1" &&
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART === "1" &&
-      process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR === "0" &&
-      process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION === "0" &&
-      process.env.OPENCLAW_SERVICE_REPAIR_POLICY === "external"
-    ) {
+    // Deferring only the shared header still changes its catalog, so rehearse
+    // shared and agent migrations before the package rollback can be discarded.
+    if (!recovery && earlyPackageDoctor) {
       // Refuse a known unsupported backup route while the shipped package driver
       // can still restore its old package. Post-core requires actual archive proof.
       const pending = capturePending();
@@ -559,6 +566,8 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   let resourceWarnings: import("../plugins/doctor-contract-module.js").PluginDoctorMigrationBackupWarning[] =
     [];
   try {
+    // Schema-only legacy admission retains its shipped isolated layout.
+    await rehearsal.prepareRuntime(assertParent);
     const env = { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" };
     const { inspectPreparedDoctorRehearsal } =
       await import("./doctor-update-rehearsal-inventory.js");
@@ -639,7 +648,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   if (failure) {
     throw failure.error;
   }
-  const warning = `Validated schema repair on private copies for OpenClaw ${selected.updaterVersion}; live agent databases are unchanged. Repair is deferred to the fresh post-core updater.`;
+  const warning = `Validated schema repair on private copies for OpenClaw ${selected.updaterVersion}; live databases are unchanged. Repair is deferred to the fresh post-core updater.`;
   const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
     await import("../infra/update-doctor-result.js");
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];

@@ -108,6 +108,46 @@ reason to wait, re-cut, or pause.
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 
+### Operator capabilities
+
+Repository write access, organization membership, branch-policy reads, CI bypass,
+release environment approval, and production deployment are separate capabilities.
+An unavailable [prior-CI exception](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing) is not a blanket
+release blocker or proof that environment approval is unavailable. Conversely,
+repository MAINTAIN access or CI-bypass authority does not authorize an environment
+approval or production deployment.
+
+The candidate checklist reports pending environment approvals for its authenticated
+caller. It prints an approval command only when GitHub reports that caller can
+approve; otherwise an eligible environment reviewer must act. An unavailable
+approval-status read is reported as unknown, not as no pending approval, and does
+not stop validation monitoring. Public release evidence can still use its existing
+anonymous rate-limit fallback; caller-specific approval reads cannot.
+
+### Plugin SDK evidence transport
+
+SDK comparison reports and release evidence use the
+`openclaw.plugin-sdk-api-encoded/v1` JSON envelope with `encoding: "gzip+base64"`
+and a `data` string. The transport preserves the complete logical report,
+comparison digests, and channel-specific acknowledgement. The Markdown summary
+remains directly readable. The shared `decodePluginSdkApiArtifact` function in
+`scripts/plugin-sdk-api-release-evidence.mjs` decodes the JSON envelope for inspection.
+
+The envelope is limited to 16 MiB of serialized JSON; expansion is limited to
+64 MiB per decode, including all concatenated gzip members. This is not a
+process-wide memory budget: compressed buffers, decoded text, parsed objects,
+and concurrent consumers can coexist. Existing archive, file, and manifest size
+limits still apply independently. Compression does not replace immutable artifact
+hashes, producer identity, full diff validation, or acknowledgement checks.
+
+Upgrade the producer and trusted qualification/publication readers together in
+the selected tooling cut before generating new evidence. Older frozen readers
+reject the envelope; moving `main` does not upgrade a frozen workflow. New readers
+still accept historical unencoded receipts. Regenerate and qualify evidence with
+the coordinated tooling cut; never rewrite an existing authenticated receipt or
+reuse its digest for different bytes. This tooling change does not authorize a
+release dispatch or publication.
+
 ### Frozen qualification identity
 
 New candidate qualification records three separate identities:

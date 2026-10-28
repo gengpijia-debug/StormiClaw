@@ -3,18 +3,11 @@ import { resolveInternalSessionEffectsIdentity } from "../config/sessions/intern
 import {
   applySessionEntryLifecycleMutation,
   createSessionEntryWithTranscript,
-  deleteSessionEntryLifecycle,
   forkSessionFromParentTranscript,
+  loadExactSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { captureSessionEntryReadScope } from "../config/sessions/session-entry-read-request.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionActor,
-} from "../config/sessions/session-incognito-binding.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
@@ -33,9 +26,9 @@ function resolveInternalSessionEffectsTarget(params: {
   runId: string;
   storePath: string;
 }): InternalSessionEffectsSource {
-  const incognito =
-    Boolean(captureIncognitoSessionSource(params)) ||
-    isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId });
+  const incognito = isIncognitoOpenClawAgentSqlitePath(params.storePath, {
+    agentId: params.agentId,
+  });
   return {
     agentId: params.agentId,
     storePath: params.storePath,
@@ -71,11 +64,8 @@ export async function prepareInternalSessionEffectsSession(params: {
   storePath: string;
 }): Promise<InternalSessionEffectsTarget> {
   params.commitGuard?.();
-  const target = resolveInternalSessionEffectsTarget(params);
-  const { env } = captureSessionEntryReadScope(target);
-  const scope = { ...target, env };
-  const existing = await readSessionEntryReadOnlyInWorker(scope, params.commitGuard);
-  params.commitGuard?.();
+  const scope = resolveInternalSessionEffectsTarget(params);
+  const existing = loadExactSessionEntry(scope)?.entry;
   if (existing?.sessionId === scope.sessionId) {
     return toInternalSessionEffectsTarget(scope, existing);
   }
@@ -101,7 +91,9 @@ export async function prepareInternalSessionEffectsSession(params: {
         ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
         delivery: { kind: "internal" },
         sessionId: scope.sessionId,
-        ...(isIncognitoSessionKey(scope.sessionKey) ? { incognito: true as const } : {}),
+        ...(isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+          ? { incognito: true as const }
+          : {}),
         sessionStartedAt: now,
         updatedAt: now,
       },
@@ -123,8 +115,6 @@ export function createInternalSessionEffectsCleanup(params: {
   onError: (error: unknown) => void;
 }) {
   const targets = params.enabled ? new Map<string, AgentRunSessionTarget>() : undefined;
-  const source =
-    params.enabled && params.storePath ? captureIncognitoSessionSource(params) : undefined;
   const track = (target: AgentRunSessionTarget | undefined) => {
     if (!targets || !target?.sessionKey || !target.storePath) {
       return;
@@ -140,30 +130,24 @@ export function createInternalSessionEffectsCleanup(params: {
       }),
     );
   }
-  const cleanup = async () => {
-    if (!targets) {
-      return;
-    }
-    // Compaction may rotate a private session identity. Remove every owned
-    // SQLite row only after delivery; transcript and trajectory rows cascade.
-    for (const target of targets.values()) {
-      try {
-        await removeInternalSessionEffectsSession(target);
-      } catch (error) {
-        // Cleanup remains best-effort so a terminal SQLite write failure does
-        // not replace the completed model-run result; the DB layer warns too.
-        params.onError(error);
-      }
-    }
-  };
   return {
     track,
-    cleanup: () =>
-      source
-        ? "kind" in source
-          ? Promise.resolve()
-          : withIncognitoSessionActor(source.actor, cleanup)
-        : cleanup(),
+    cleanup: async () => {
+      if (!targets) {
+        return;
+      }
+      // Compaction may rotate a private session identity. Remove every owned
+      // SQLite row only after delivery; transcript and trajectory rows cascade.
+      for (const target of targets.values()) {
+        try {
+          await removeInternalSessionEffectsSession(target);
+        } catch (error) {
+          // Cleanup remains best-effort so a terminal SQLite write failure does
+          // not replace the completed model-run result; the DB layer warns too.
+          params.onError(error);
+        }
+      }
+    },
   };
 }
 
@@ -175,18 +159,12 @@ export async function removeInternalSessionEffectsSession(
   if (!target?.sessionKey || !target.storePath) {
     return;
   }
-  const source = captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    return;
-  }
-  const { env } = captureSessionEntryReadScope({ ...target, sessionKey: target.sessionKey });
   const scope = {
     ...(target.agentId ? { agentId: target.agentId } : {}),
     storePath: target.storePath,
-    env,
   };
   const expectedEntry = expectedOwner
-    ? await readSessionEntryReadOnlyInWorker({ ...scope, sessionKey: target.sessionKey })
+    ? loadExactSessionEntry({ ...scope, sessionKey: target.sessionKey })?.entry
     : undefined;
   if (
     expectedOwner &&
@@ -195,17 +173,6 @@ export async function removeInternalSessionEffectsSession(
       expectedEntry.lifecycleRevision !== expectedOwner.lifecycleRevision ||
       expectedEntry.activeWriterRunId !== expectedOwner.activeWriterRunId)
   ) {
-    return;
-  }
-  if (source) {
-    await deleteSessionEntryLifecycle({
-      ...scope,
-      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
-      archiveTranscript: false,
-      deleteTranscriptWithoutArchive: true,
-      expectedSessionId: target.sessionId,
-      expectedEntry,
-    });
     return;
   }
   await applySessionEntryLifecycleMutation({

@@ -1,5 +1,4 @@
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -61,11 +60,6 @@ export function createSessionNodeAuthorities(
     sessionKey: attempt.sessionKey,
     storePath: target.storePath,
   };
-  const source = captureIncognitoSessionSource(session);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(session.sessionKey)
-      : undefined;
   const assertRequestCurrent = (request: SessionNodeRequest) => {
     if (
       request.source === "session-full" &&
@@ -75,16 +69,7 @@ export function createSessionNodeAuthorities(
     }
     assertActive();
     // This read can only revoke the admitted permission. It cannot create Full authority.
-    source?.admissionSignal?.throwIfAborted();
-    if (source && "kind" in source) {
-      source.assertCurrent();
-    }
-    claim?.assertCurrent();
-    const entry = source
-      ? "kind" in source
-        ? undefined
-        : source.actor.sessions.readMedia(session.sessionKey)
-      : loadSessionEntryReadOnly(session);
+    const entry = loadSessionEntryReadOnly(session);
     if (
       signal.aborted ||
       getActivePluginRegistry() !== gatewayRegistry ||

@@ -39,6 +39,13 @@ session keys.
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
+The context denominator follows the selected model and runtime, using the local
+Gateway's published catalog, saved metadata, configured limits, or a matching
+verified run budget. Reading a session list does not start model discovery.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+If Gateway inspection or its catalog read fails, the command warns and still lists
+stored sessions using saved or configured capacity.
+
 Flags:
 
 | Flag                 | Description                                                         |
@@ -99,7 +106,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -528,7 +535,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
-  last `n` lines. This path does not create a backup archive.
+  last `n` lines. The Gateway finishes rebuilding the retained transcript's
+  indexes in its storage worker before reporting success, so the next turn does
+  not wait for background index maintenance. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.

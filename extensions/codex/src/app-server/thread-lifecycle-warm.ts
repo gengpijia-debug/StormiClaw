@@ -11,8 +11,13 @@ import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
   isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import {
+  isCodexAppServerThreadTerminalNotification,
+  wasCodexAppServerThreadClosed,
+} from "./client-thread-closure.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   getCodexInferenceThread,
@@ -59,7 +64,11 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
 };
 
 type CodexWarmThreadReuseResult =
-  | { kind: "ready"; binding: CodexAppServerThreadLifecycleBinding }
+  | {
+      kind: "ready";
+      binding: CodexAppServerThreadLifecycleBinding;
+      cleanupOnFailure?: () => Promise<void>;
+    }
   | { kind: "rotate" }
   | { kind: "resume"; prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult };
 
@@ -153,14 +162,44 @@ export async function releaseCodexBoundLiveThread(
 ): Promise<boolean> {
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
-    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
+    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!, {
+        signal: options.signal,
+        createAbortError: codexThreadLifecycleAbortError,
+      })
     : undefined;
   if (changedClient && !previous) {
     return false;
   }
   const client = previous?.client ?? options.client;
+  let threadClosed: Promise<void> | undefined;
+  let stopWatching: (() => void) | undefined;
+  let stopReading: (() => void) | undefined;
+  if (previous) {
+    threadClosed = new Promise<void>((resolve) => {
+      stopWatching = client.addNotificationHandler((notification) => {
+        const threadId =
+          notification.params && typeof notification.params === "object"
+            ? Reflect.get(notification.params, "threadId")
+            : undefined;
+        if (
+          isCodexAppServerThreadTerminalNotification(notification.method) &&
+          threadId === options.threadId
+        ) {
+          resolve();
+        }
+      });
+    });
+    // Runtime tracking closes the subscribe-after-notification race. A later
+    // retain clears this exact thread receipt before publishing new ownership.
+    if (wasCodexAppServerThreadClosed(client, options.threadId)) {
+      threadClosed = Promise.resolve();
+    }
+  }
   try {
-    if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
+    if (
+      isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
+      isCodexAppServerLiveThreadProtected(client, options.threadId)
+    ) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
     return await releaseCodexRetainedLiveThread({
@@ -178,15 +217,54 @@ export async function releaseCodexBoundLiveThread(
         : undefined,
     });
   } finally {
-    // Rejection must free the lane so the claimed run can still be stopped.
-    const retiredExit = previous?.release(
-      !isCodexAppServerLiveThreadClaimed(client, options.threadId),
-    );
-    // Writer handoff waits for the retired owner to exit, but other leases can
-    // keep it alive indefinitely. This runs under the thread queue and binding
-    // lease, so cancellation must end the wait without proceeding to a write.
-    if (retiredExit) {
-      await racePromiseWithAbortSignal(retiredExit, options.signal, codexThreadLifecycleAbortError);
+    try {
+      // Rejection must free the lane so the claimed run can still be stopped.
+      const retiredExit = previous?.release(
+        !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+          !isCodexAppServerLiveThreadProtected(client, options.threadId),
+      );
+      if (retiredExit) {
+        const stopped = threadClosed ? [retiredExit, threadClosed] : [retiredExit];
+        if (!client.getCloseError() && !wasCodexAppServerThreadClosed(client, options.threadId)) {
+          // Hot reload can attach closure tracking after the old runtime unloaded.
+          // Read that physical owner once; native resume still owns its writer lock.
+          const readController = new AbortController();
+          stopReading = () => readController.abort();
+          const signal = options.signal
+            ? AbortSignal.any([options.signal, readController.signal])
+            : readController.signal;
+          stopped.push(
+            client
+              .request(
+                "thread/read",
+                { threadId: options.threadId, includeTurns: false },
+                { signal, assertCurrent: options.assertCurrent, withCurrent: options.withCurrent },
+              )
+              .then(
+                ({ thread }) => {
+                  if (thread.id !== options.threadId) {
+                    throw new Error("Codex returned another thread during retired-owner handoff");
+                  }
+                  return thread.status?.type === "notLoaded" ? undefined : retiredExit;
+                },
+                // Closing rejects pending requests before the transport exits; a
+                // failed read proves nothing, so keep the exit/closure fence.
+                () => retiredExit,
+              ),
+          );
+        }
+        // Siblings may keep the old process alive after this exact thread stops.
+        await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
+          racePromiseWithAbortSignal(
+            Promise.race(stopped),
+            options.signal,
+            codexThreadLifecycleAbortError,
+          ),
+        );
+      }
+    } finally {
+      stopReading?.();
+      stopWatching?.();
     }
   }
 }
@@ -267,6 +345,61 @@ export async function tryReuseCodexLiveThread(
   let ownershipTransferred = false;
   let preserveSubscription = false;
   let nativeThread: CodexThread | undefined;
+  const cleanup = async (
+    retainSubscription: boolean,
+    ownership = retainedThread,
+  ): Promise<void> => {
+    let failure: { cause: unknown } | undefined;
+    try {
+      let pendingRetention: Promise<boolean> | undefined;
+      if (retainSubscription) {
+        // A passive refusal still needs current durable lineage to republish.
+        // Start retention synchronously under that read, then await its eviction work.
+        const retain = () => {
+          assertWarmOwner();
+          if (isSameCodexAppServerThreadOwner(params.bindingStore.read(bindingIdentity), binding)) {
+            pendingRetention = retainCodexAppServerBindingSubscription(
+              params.client,
+              binding.threadId,
+              ownership,
+            );
+          }
+        };
+        try {
+          if (params.authority) {
+            await params.authority.withCurrent(retain);
+          } else {
+            retain();
+          }
+        } catch {
+          // Rejected admission never transfers the consumed claim back to idle storage.
+        }
+      }
+      if (pendingRetention) {
+        if (!(await pendingRetention)) {
+          failure = {
+            cause: new Error("Codex live thread ownership could not be returned to its session"),
+          };
+        }
+      } else {
+        // Keep the claim's generation fence across policy awaits and binding conflicts.
+        await retainedThread.release(binding.threadId);
+      }
+    } catch (cause) {
+      failure = { cause };
+    }
+    if (failure) {
+      await abandonCodexLiveThreadRelease(
+        {
+          client: params.client,
+          abandonClient: params.abandonClient,
+          lifecycleTiming,
+          threadId: binding.threadId,
+        },
+        failure.cause,
+      );
+    }
+  };
   try {
     assertWarmOwner();
     if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
@@ -296,6 +429,9 @@ export async function tryReuseCodexLiveThread(
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
+      // Rotation has not changed native policy. Keep the idle owner available
+      // if background work prevents the caller from releasing this subscription.
+      preserveSubscription = true;
       return { kind: "rotate" };
     }
     // Engine identity, projection epoch, and policy were checked by the owner
@@ -447,17 +583,26 @@ export async function tryReuseCodexLiveThread(
       threadId: binding.threadId,
       action: "resumed",
     });
+    const liveThreadEphemeralPolicy = ephemeralPolicy && {
+      ...ephemeralPolicy,
+      refreshableInstructions: params.refreshableInstructions,
+    };
     ownershipTransferred = true;
     return {
       kind: "ready",
+      // Publication or enclosing lease settlement can fail after this transfer.
+      // Protected work keeps a current warm owner, not a deferred unsubscribe claim.
+      cleanupOnFailure: () =>
+        cleanup(isCodexAppServerLiveThreadProtected(params.client, binding.threadId), {
+          ...retainedThread,
+          configFingerprint: liveThreadConfigFingerprint,
+          ephemeralPolicy: liveThreadEphemeralPolicy,
+        }),
       binding: {
         ...binding,
         ...(!incognito ? bindingPatch : {}),
         liveThreadConfigFingerprint,
-        liveThreadEphemeralPolicy: ephemeralPolicy && {
-          ...ephemeralPolicy,
-          refreshableInstructions: params.refreshableInstructions,
-        },
+        liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
@@ -467,58 +612,7 @@ export async function tryReuseCodexLiveThread(
     };
   } finally {
     if (!ownershipTransferred) {
-      let failure: { cause: unknown } | undefined;
-      try {
-        let pendingRetention: Promise<boolean> | undefined;
-        if (preserveSubscription) {
-          // A passive refusal still needs current durable lineage to republish.
-          // Start retention synchronously under that read, then await its eviction work.
-          const retain = () => {
-            assertWarmOwner();
-            if (
-              isSameCodexAppServerThreadOwner(params.bindingStore.read(bindingIdentity), binding)
-            ) {
-              pendingRetention = retainCodexAppServerBindingSubscription(
-                params.client,
-                binding.threadId,
-                retainedThread,
-              );
-            }
-          };
-          try {
-            if (params.authority) {
-              await params.authority.withCurrent(retain);
-            } else {
-              retain();
-            }
-          } catch {
-            // Rejected admission never transfers the consumed claim back to idle storage.
-          }
-        }
-        if (pendingRetention) {
-          if (!(await pendingRetention)) {
-            failure = {
-              cause: new Error("Codex live thread ownership could not be returned to its session"),
-            };
-          }
-        } else {
-          // Keep the claim's generation fence across policy awaits and binding conflicts.
-          await retainedThread.release(binding.threadId);
-        }
-      } catch (cause) {
-        failure = { cause };
-      }
-      if (failure) {
-        await abandonCodexLiveThreadRelease(
-          {
-            client: params.client,
-            abandonClient: params.abandonClient,
-            lifecycleTiming,
-            threadId: binding.threadId,
-          },
-          failure.cause,
-        );
-      }
+      await cleanup(preserveSubscription);
     }
   }
 }

@@ -90,6 +90,7 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 
 const policyCases = [
   { agent: "opencode", profile: "messaging", alsoAllow: undefined, denied: true },
+  { agent: "kilocode", profile: "coding", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: ["message"], denied: false },
 ] satisfies Array<{
   agent: string;
@@ -301,6 +302,7 @@ it.for([
   { operation: "model", kind: "revoke" },
   { operation: "model", kind: "active" },
   { operation: "prompt", kind: "revoke" },
+  { operation: "prompt", kind: "active" },
 ] as const)(
   "preserves native $operation authority while a real control is queued: $kind",
   { timeout: 60000 },
@@ -420,7 +422,7 @@ it.for([
   },
 );
 
-it.each(["cancel", "timeout", "revoke"] as const)(
+it.each(["active", "cancel", "timeout", "revoke"] as const)(
   "preserves model authority during cold session initialization: %s",
   async (kind) => {
     await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
@@ -457,16 +459,24 @@ it.each(["cancel", "timeout", "revoke"] as const)(
         const records = await peerStates(native.peerDirectory);
         const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
         expect(records).toHaveLength(1);
-        expect.soft(outcome?.terminal).toMatchObject({
-          kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
-        });
-        expect.soft(records[0]?.currentModelId).toBe("initial");
-        expect.soft(records[0]?.modelChanges).toEqual([]);
-        expect.soft(records[0]?.history).toEqual([]);
-        expect.soft(effects).toEqual([]);
-        expect
-          .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
-          .toEqual(transcriptBeforeRelease);
+        if (kind === "active") {
+          expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
+          expect.soft(records[0]?.currentModelId).toBe("selected");
+          expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
+          expect.soft(records[0]?.history).toHaveLength(1);
+          expect.soft(effects).toHaveLength(1);
+        } else {
+          expect.soft(outcome?.terminal).toMatchObject({
+            kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
+          });
+          expect.soft(records[0]?.currentModelId).toBe("initial");
+          expect.soft(records[0]?.modelChanges).toEqual([]);
+          expect.soft(records[0]?.history).toEqual([]);
+          expect.soft(effects).toEqual([]);
+          expect
+            .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
+            .toEqual(transcriptBeforeRelease);
+        }
       } finally {
         await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
         await Promise.allSettled([run]);

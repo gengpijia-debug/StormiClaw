@@ -47,6 +47,7 @@ import { drainNodeWorkerWorkspace } from "./node-worker-workspace-drain.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import {
   joinWorkerTunnelStops,
@@ -180,7 +181,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
     const transportTimeoutMs =
       addTimerTimeoutGraceMs(commandTimeoutMs, COMMAND_RESULT_GRACE_MS) ?? commandTimeoutMs;
-    const deadline = Date.now() + transportTimeoutMs;
+    const deadline = performance.now() + transportTimeoutMs;
     const signals = [entry.abortController.signal, AbortSignal.timeout(transportTimeoutMs)];
     if (command.signal) {
       signals.push(command.signal);
@@ -205,7 +206,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     };
     while (true) {
       assertCurrent();
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - performance.now();
       if (remainingMs <= 0 || signal.aborted) {
         throw signal.reason ?? new Error("node worker workspace command timed out");
       }
@@ -265,7 +266,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         ) {
           throw error;
         }
-        await sleepWithAbort(Math.min(RETRY_DELAY_MS, Math.max(1, deadline - Date.now())), signal);
+        await sleepWithAbort(Math.min(RETRY_DELAY_MS, remainingMs), signal);
         continue;
       }
       if (!result.ok) {
@@ -706,35 +707,38 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     },
     stop,
     async stopAll(): Promise<void> {
-      const live = new Set([
-        ...entries.keys(),
-        ...[...retiredEntries].map((entry) => entry.environmentId),
-      ]);
-      const stopped = await Promise.allSettled([
+      const live = new Set(
+        [...entries.values(), ...retiredEntries].map((entry) => entry.environmentId),
+      );
+      const tunnelStops = joinWorkerTunnelStops([
         ...[...live].map((environmentId) => stop(environmentId)),
-        // A revoked inventory reports its failure without stranding live tunnels.
-        (async () =>
-          joinWorkerTunnelStops(
-            options
-              .listEnvironments()
-              .filter((record) => record.nodeDeviceId && !live.has(record.environmentId))
-              .map((record) => stop(record.environmentId)),
-          ))(),
+        // Retained owners drain above even after their inventory retires.
+        (async () => {
+          try {
+            // Return without awaiting so teardown failures stay outside this lookup catch.
+            return joinWorkerTunnelStops(
+              options
+                .listEnvironments()
+                .filter((record) => record.nodeDeviceId && !live.has(record.environmentId))
+                .map((record) => stop(record.environmentId)),
+            );
+          } catch (error) {
+            if (!(error instanceof WorkerEnvironmentInventoryClosedError)) {
+              throw error;
+            }
+          }
+        })(),
       ]);
       // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
-      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
-      const failure = stopped.find((result) => result.status === "rejected");
-      if (failure) {
-        throw failure.reason;
-      }
+      const closeTransfers = () => options.workspaceTransfer.closeAll();
+      await joinWorkerTunnelStops([tunnelStops, tunnelStops.then(closeTransfers, closeTransfers)]);
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);
-      return entry && !entry.abortController.signal.aborted
-        ? entry.handle
-          ? "connected"
-          : "connecting"
-        : "stopped";
+      if (!entry || entry.abortController.signal.aborted) {
+        return "stopped";
+      }
+      return entry.handle ? "connected" : "connecting";
     },
   };
 }

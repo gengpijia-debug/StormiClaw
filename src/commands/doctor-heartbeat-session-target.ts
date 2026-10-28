@@ -2,8 +2,7 @@ import fs from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
@@ -80,18 +79,13 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
       continue;
     }
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const source = captureIncognitoSessionSource({
-      agentId,
-      sessionKey: canonicalSession,
-      storePath,
-    });
     const entry =
-      (await readSessionEntryReadOnlyInWorker({
+      loadSessionEntryReadOnly({
         agentId,
         sessionKey: canonicalSession,
         storePath,
-      })) ??
-      (!source && !storePath.endsWith(".sqlite") && fs.existsSync(storePath)
+      }) ??
+      (!storePath.endsWith(".sqlite") && fs.existsSync(storePath)
         ? loadLegacySessionStore(storePath)[canonicalSession]
         : undefined);
     if (entry) {

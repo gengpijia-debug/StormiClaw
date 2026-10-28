@@ -6,7 +6,6 @@ import { combineExecutedToolBatches } from "./tool-batch-completion.js";
 describe("tool batch terminal identity", () => {
   const recovery: ExecutedToolCallBatch = {
     messages: [],
-    terminalToolCallIds: [],
     steeringMessages: [],
     terminate: false,
     terminateRun: false,
@@ -22,7 +21,6 @@ describe("tool batch terminal identity", () => {
   };
   const terminal: ExecutedToolCallBatch = {
     messages: [],
-    terminalToolCallIds: [],
     steeringMessages: [],
     terminate: true,
     terminateRun: true,

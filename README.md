@@ -1,3 +1,19 @@
+# StormiClaw
+
+Personal source distribution maintained at
+[gengpijia-debug/StormiClaw](https://github.com/gengpijia-debug/StormiClaw).
+This build is `2026.10.8+stormi.1`, based on OpenClaw `v2026.10.8`
+(`dc2523e5a5c7a309517fd7fa834add938231d526`).
+
+Use the `stormiclaw` command; `openclaw` remains available for SDK and plugin
+compatibility. Updates from this source installation follow this repository's
+`origin/main`. This personal source build is not published to npm. See
+[STORMICLAW.md](STORMICLAW.md) for source setup, local changes, and verification.
+
+The upstream README and its attribution follow below.
+
+---
+
 # OpenClaw 🦞 — Your assistant, on your devices, in your chats
 
 <p align="center">
@@ -35,7 +51,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 iwr -useb https://openclaw.ai/install.ps1 | iex
 ```
 
-Already manage Node.js? Install the published package instead (Node 24.16+ or 26.1+; Node 26 recommended):
+Already manage Node.js? Install the published package instead (Node 24.22.1+ or 26.12.1+; Node 26 recommended):
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw
@@ -329,19 +345,3 @@ clawtributors:hidden:end -->
 ## License
 
 [MIT](LICENSE) © OpenClaw Foundation. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for incorporated or adapted code.
-
-## StormiClaw Memory Configuration
-
-Memory is stored in workspace Markdown files and indexed in each agent's SQLite database.
-Keyword search works without embeddings. Set `memory.search.provider` to `none` for
-local FTS-only search, or configure a supported embedding provider for semantic search.
-`memory.search.enabled` controls whether memory search is enabled.
-
-Use the `openclaw` CLI to inspect or change memory settings:
-
-```bash
-openclaw memory status --agent main
-openclaw config set memory.search.provider none
-```
-
-See [memory configuration](docs/reference/memory-config.md) for provider and index details.

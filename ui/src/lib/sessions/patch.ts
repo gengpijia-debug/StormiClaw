@@ -28,7 +28,6 @@ export type SessionPatch = Pick<
   | "toolOverrides"
   | "archived"
   | "pinned"
-  | "sidebarRoot"
   | "snoozedUntil"
   | "unread"
 >;

@@ -1,4 +1,3 @@
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -15,15 +14,14 @@ export async function usesSourceOnlyWorktreeGit(
   if (!record.ownerId) {
     return true;
   }
-  const source = captureIncognitoSessionSource({ sessionKey: record.ownerId, env });
   const [
-    { readSessionEntryReadOnlyInWorker },
+    { loadSessionEntryReadOnly },
     { resolveSessionStorePathCore },
     { resolveSessionAgentId },
-    { resolveSandboxRuntimeStatus },
+    { resolveSandboxRuntimeStatusesForPersistedSessions },
     { hasLocalWorkspaceProjection },
   ] = await Promise.all([
-    import("../../config/sessions/session-entry-read-runtime.js"),
+    import("../../config/sessions/session-accessor.js"),
     import("../../config/sessions/paths.js"),
     import("../agent-scope.js"),
     import("../sandbox/runtime-status.js"),
@@ -34,15 +32,7 @@ export async function usesSourceOnlyWorktreeGit(
   }
   const cfg = getConfig();
   const agentId = resolveSessionAgentId({ config: cfg, sessionKey: record.ownerId });
-  source?.admissionSignal?.throwIfAborted();
-  if (source) {
-    if ("kind" in source) {
-      source.assertCurrent();
-    } else {
-      source.actor.assertReadable();
-    }
-  }
-  const entry = await readSessionEntryReadOnlyInWorker({
+  const entry = loadSessionEntryReadOnly({
     agentId,
     sessionKey: record.ownerId,
     env,
@@ -53,12 +43,11 @@ export async function usesSourceOnlyWorktreeGit(
   if (!entry || entry.worktree?.id !== record.id || entry.sandbox === "required") {
     return true;
   }
-  return resolveSandboxRuntimeStatus({
-    cfg,
-    agentId,
-    sessionKey: record.ownerId,
-    preparedSessionEntry: entry,
-  }).sandboxed;
+  return (
+    resolveSandboxRuntimeStatusesForPersistedSessions([
+      { cfg, agentId, sessionKeys: [record.ownerId], env },
+    ])[0]?.[0]?.sandboxed === true
+  );
 }
 
 export async function withManagedWorktreeGit<T>(

@@ -1,4 +1,3 @@
-import { resolve as resolvePath } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,10 +15,7 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
 import { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { LruCache } from "../../infra/lru-cache.js";
@@ -535,9 +531,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
     const agentId = requireSessionFilesAgentId({
-      cfg,
+      cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       respond,
@@ -591,17 +586,6 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }),
       );
       return;
-    }
-    const workspaceDir = repository ? undefined : resolveAgentWorkspaceDir(cfg, agentId);
-    if (
-      workspaceDir &&
-      update.file.workspacePath &&
-      resolvePath(update.root, update.file.workspacePath) ===
-        resolvePath(workspaceDir, DEFAULT_IDENTITY_FILENAME)
-    ) {
-      // A pre-write worker reply must settle before the event admits a new identity read.
-      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
-      context.broadcast("agent.identity.changed", { agentId });
     }
     respond(true, {
       sessionKey: params.sessionKey,

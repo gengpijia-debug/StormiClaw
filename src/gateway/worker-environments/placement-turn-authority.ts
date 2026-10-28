@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
@@ -28,11 +27,6 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
-import {
-  capturePlacementAuthorityChange,
-  captureWorkspaceResultChange,
-  captureWorkspaceResultPostimage,
-} from "./placement-turn-authority.receipt.js";
 import type {
   ClaimChange,
   PlacementAuthorityOwner,
@@ -96,7 +90,6 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
   }
   const owner: PlacementAuthorityOwner = {
     identity,
-    incarnation: randomUUID(),
     active: true,
     claims: new Map(),
     observations: new Map(),
@@ -362,16 +355,14 @@ export async function prepareSessionPlacementRead(
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
   const owner = ownerFor(requireOpenClawStateDatabaseIdentity({ db }));
-  const committedChange = capturePlacementAuthorityChange(owner, change);
   if (
     !stageSqliteTransactionState(db, {
       stage() {
         owner.pending.add(change);
       },
       commit() {
-        commitChange(owner, committedChange(), ++owner.sequence);
+        commitChange(owner, change, ++owner.sequence);
       },
-      invalidate: () => closeOwner(owner),
       prepareObservers() {
         for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
           notifyRevoked(retained);
@@ -412,21 +403,38 @@ export function stagePlacementTurnClaimWorkerPublication(
   });
 }
 
+function captureWorkspaceResultPostimage(
+  sessionId: string,
+  facts?: WorkspaceResultPostimage,
+): WorkspaceResultPostimage | undefined {
+  if (
+    facts &&
+    (facts.placement.sessionId !== sessionId ||
+      (facts.pendingResult && facts.pendingResult.sessionId !== sessionId))
+  ) {
+    throw new Error("Workspace result publication has a different session owner");
+  }
+  return freezeJsonSnapshot(facts);
+}
+
 /** Pending-result changes invalidate read observations without revoking turn authority. */
 export function stagePlacementWorkspaceResultWorkerPublication(
   identity: DatabasePathIdentity,
   sessionId: string,
   facts?: WorkspaceResultPostimage,
 ) {
-  return stageWorkerChange(identity, captureWorkspaceResultChange(sessionId, facts));
+  return stageWorkerChange(identity, {
+    kind: "workspace-result",
+    sessionId,
+    facts: captureWorkspaceResultPostimage(sessionId, facts),
+  });
 }
 
 export function stagePlacementWorkspaceJournalWorkerPublication(
   identity: DatabasePathIdentity,
   sessionId: string,
-  present?: boolean,
 ) {
-  return stageWorkerChange(identity, { kind: "journal", sessionId, present });
+  return stageWorkerChange(identity, { kind: "journal", sessionId });
 }
 
 export function stagePlacementRetirementWorkerPublication(
@@ -570,7 +578,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     }
   };
   const publish = () => {
-    commitChange(owner, capturePlacementAuthorityChange(owner, change)(), sequence);
+    commitChange(owner, change, sequence);
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
       notifyRevoked(retained);
     }
@@ -592,7 +600,6 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
           change.authority = undefined;
         } else if (change.kind === "journal") {
           change.uncertain = true;
-          change.present = undefined;
         } else if (change.kind === "claim" || change.kind === "workspace-result") {
           change.facts = undefined;
           if (change.kind === "claim") {
@@ -635,20 +642,8 @@ export function publishPlacementTurnClaimCleared(
   });
 }
 
-export function publishPlacementWorkspaceResultState(
-  db: DatabaseSync,
-  sessionId: string,
-  facts: WorkspaceResultPostimage | null,
-): void {
-  stageChange(db, captureWorkspaceResultChange(sessionId, facts));
-}
-
-export function publishPlacementWorkspaceJournalState(
-  db: DatabaseSync,
-  sessionId: string,
-  present: boolean,
-): void {
-  stageChange(db, { kind: "journal", sessionId, present });
+export function publishPlacementWorkspaceResultState(db: DatabaseSync, sessionId: string): void {
+  stageChange(db, { kind: "workspace-result", sessionId });
 }
 
 /** Prepare once through the placement reader; subsequent checks use this retained incarnation. */

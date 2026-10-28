@@ -108,7 +108,6 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Research sources"),
       expect.stringContaining("Check tests"),
     ]);
-    // This read-only fixture advertises no group-write capability.
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
     expect(
       childRows.every((row) => row.querySelector("[data-sidebar-session-archive]") !== null),

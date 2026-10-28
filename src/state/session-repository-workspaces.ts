@@ -9,7 +9,6 @@ import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
-  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -24,10 +23,6 @@ import {
   prepareRepositoryWorkspaceRead,
   stageRepositoryWorkspacePublication,
 } from "./session-repository-workspaces.publication.js";
-import {
-  isRepositoryWorkspace,
-  repositoryWorkspacePublication,
-} from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
@@ -46,8 +41,18 @@ type Mutation = Exclude<
   { type: "repositoryWorkspaces.get" | "repositoryWorkspaces.find" }
 >;
 
-function committedResult(facts: unknown): unknown {
-  return isRecord(facts) ? facts.result : undefined;
+function isWorkspace(value: unknown): value is SessionRepositoryWorkspaceRecord {
+  return (
+    isRecord(value) &&
+    ["workspaceId", "agentId", "sessionKey", "url", "branch"].every(
+      (key) => typeof value[key] === "string",
+    ) &&
+    ["requestedRef", "baseCommit", "baseManifestHash", "checkpointRef", "manifestHash"].every(
+      (key) => value[key] === null || typeof value[key] === "string",
+    ) &&
+    typeof value.runSetupScript === "boolean" &&
+    ["revision", "createdAtMs", "updatedAtMs"].every((key) => typeof value[key] === "number")
+  );
 }
 
 function isMutationResult(value: unknown): value is RepositoryWorkspaceMutationResult {
@@ -55,7 +60,7 @@ function isMutationResult(value: unknown): value is RepositoryWorkspaceMutationR
     isRecord(value) &&
     typeof value.workspaceId === "string" &&
     typeof value.changed === "boolean" &&
-    (value.workspace === undefined || isRepositoryWorkspace(value.workspace)) &&
+    (value.workspace === undefined || isWorkspace(value.workspace)) &&
     (value.owner === undefined ||
       (isRecord(value.owner) &&
         typeof value.owner.agentId === "string" &&
@@ -125,7 +130,7 @@ export function createSessionRepositoryWorkspaceStore(
             if (
               !prepared ||
               !admission?.committed ||
-              !isDeepStrictEqual(committedResult(admission.committed.facts), prepared)
+              !isDeepStrictEqual(admission.committed.facts, prepared)
             ) {
               throw error;
             }
@@ -138,7 +143,7 @@ export function createSessionRepositoryWorkspaceStore(
               !cleanupSourceIdentity ||
               !prepared ||
               !admission?.committed ||
-              !isDeepStrictEqual(committedResult(admission.committed.facts), prepared)
+              !isDeepStrictEqual(admission.committed.facts, prepared)
             ) {
               throw new Error("Repository workspace cleanup has no committed source");
             }
@@ -152,12 +157,6 @@ export function createSessionRepositoryWorkspaceStore(
         {
           assertCurrent: check,
           createAdmission: (operation) => {
-            const domainPublication = repositoryWorkspacePublication.begin({
-              get identity() {
-                return captured.admission.identity.key;
-              },
-              assertCurrent: captured.assertPublicationCurrent ?? captured.admission.assertCurrent,
-            });
             let stage: "transaction" | "commit" | "complete" = "transaction";
             admission = createSqliteWorkerOperationAdmission((request, grant) => {
               check();
@@ -184,12 +183,6 @@ export function createSessionRepositoryWorkspaceStore(
               publication = stageRepositoryWorkspacePublication(captured.admission, prepared);
               granted = grant();
             });
-            observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-              if (!isRecord(facts)) {
-                throw new Error("Repository workspace has no committed receipt");
-              }
-              domainPublication.committed(facts.receipt);
-            });
             const acceptedAdmission = admission;
             publicationSettled = operation.settled.then((settlement) => {
               let committed = false;
@@ -197,7 +190,7 @@ export function createSessionRepositoryWorkspaceStore(
               try {
                 const receipt = acceptedAdmission.committed;
                 if (receipt) {
-                  if (!prepared || !isDeepStrictEqual(committedResult(receipt.facts), prepared)) {
+                  if (!prepared || !isDeepStrictEqual(receipt.facts, prepared)) {
                     throw new Error("Repository workspace commit result changed during settlement");
                   }
                   committed = true;
@@ -205,10 +198,6 @@ export function createSessionRepositoryWorkspaceStore(
                 known = !granted || committed || settlement.kind === "completed";
               } finally {
                 publication?.settle(committed, known);
-                domainPublication.finish(
-                  settlement.kind === "completed",
-                  settlement.kind === "completed" && !granted && !acceptedAdmission.committed,
-                );
               }
               if (committed && prepared?.changed && prepared.owner) {
                 try {
@@ -231,7 +220,7 @@ export function createSessionRepositoryWorkspaceStore(
         finalized &&
         prepared &&
         admission?.committed &&
-        isDeepStrictEqual(committedResult(admission.committed.facts), prepared)
+        isDeepStrictEqual(admission.committed.facts, prepared)
       ) {
         return prepared;
       }

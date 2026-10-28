@@ -26,7 +26,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
-import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
+import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
@@ -239,12 +239,8 @@ export async function maybeSpawnVisibleSession(params: {
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
-  let assertDelegationCurrent: (() => void) | undefined = undefined;
-  const assertActive = () => {
-    params.options?.assertActive?.();
-    params.options?.signal?.throwIfAborted();
-    assertDelegationCurrent?.();
-  };
+  const assertActive =
+    params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted());
   const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
@@ -300,23 +296,6 @@ export async function maybeSpawnVisibleSession(params: {
   const admission = resolveAdmission();
   if (!admission.ok) {
     return { status: "forbidden", error: admission.error };
-  }
-  const delegation = prepareNativeDelegatedToolPolicy({
-    config: cfg,
-    requesterAgentId,
-    targetAgentId,
-    requesterSessionKey: requesterKey,
-    context: params.options,
-  });
-  const delegatedToolPolicy = delegation.policy;
-  assertDelegationCurrent = delegation.assertCurrent;
-  assertActive();
-  if (placement && delegatedToolPolicy) {
-    return {
-      status: "forbidden",
-      error:
-        "Delegated tool targets require Gateway-side native execution; cloud placement cannot enforce the live grant.",
-    };
   }
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
@@ -387,6 +366,27 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
   const { authProfileOverride } = initialSessionPatch;
+  // A sandbox-classified visible child must not dispatch to a host-executed CLI
+  // backend: the CLI runs as the Gateway OS user outside the configured sandbox
+  // while the child session would still be reported sandboxed. The admission
+  // above only sees the config-derived classification; re-check once the child
+  // model is resolved, mirroring the cron seam guard. The run seam enforces the
+  // same invariant for fallback candidates and post-spawn runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
+      config: cfg,
+      provider: modelPlan.modelRef.provider,
+      model: modelPlan.modelRef.model,
+      agentId: targetAgentId,
+      authProfileId: authProfileOverride,
+    });
+    if (useCliExecution) {
+      return {
+        status: "forbidden",
+        error: `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+      };
+    }
+  }
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
@@ -442,7 +442,6 @@ export async function maybeSpawnVisibleSession(params: {
               version: 1,
               allow: [...(params.options?.inheritedToolAllowlist ?? [])],
               deny: [...(params.options?.inheritedToolDenylist ?? [])],
-              ...(delegatedToolPolicy ? { delegatedToolPolicy } : {}),
             },
             ...(inheritedModel ? { resolvedModel: inheritedModel } : {}),
           },

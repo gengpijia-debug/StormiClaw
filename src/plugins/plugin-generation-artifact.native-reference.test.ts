@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../infra/errno.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -335,6 +336,92 @@ it.each([
     });
   },
 );
+
+it("captures native companions into state on another filesystem", async ({ skip }) => {
+  await withOpenClawTestState({ label: "native-cross-device" }, async (state) => {
+    const fixture = createFixture(state.path("image"), true);
+    let captureState: string | undefined;
+    for (const parent of ["/dev/shm", "/tmp", "/var/tmp"]) {
+      try {
+        if (fs.statSync(parent).dev !== fs.statSync(fixture.root).dev) {
+          captureState = fs.mkdtempSync(path.join(parent, "openclaw-native-state-"));
+          break;
+        }
+      } catch (error) {
+        if (
+          !["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EROFS"].some((code) =>
+            hasErrnoCode(error, code),
+          )
+        ) {
+          throw error;
+        }
+      }
+    }
+    if (!captureState) {
+      skip("requires a writable filesystem distinct from the plugin source");
+      return;
+    }
+    const cache = createPluginCache();
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    try {
+      fixture.index.installRecords = {
+        "fixture-package": { source: "archive", installPath: fixture.installRoot },
+      };
+      const companion = path.join(fixture.root, "README.md");
+      fs.writeFileSync(companion, "native companion sentinel");
+      artifact = withPluginCache(cache, () =>
+        withPluginSourceCaptureStorage({ stateDir: captureState, placement: "state" }, () => {
+          preparePluginNativeAdmissions(fixture.index, cache);
+          return capturePluginGenerationArtifact(fixture.root);
+        }),
+      );
+      expect(fs.statSync(fixture.root).dev).not.toBe(fs.statSync(captureState).dev);
+      expect(fs.readFileSync(artifact.resolve(fixture.filename))).toEqual(fixture.bytes);
+      const captured = artifact.resolve(companion);
+      expect(fs.readFileSync(captured, "utf8")).toBe("native companion sentinel");
+      expect(fs.statSync(captured).dev).toBe(fs.statSync(captureState).dev);
+      expect(fs.statSync(companion).nlink).toBe(1);
+      expect(fs.realpathSync(captured)).not.toBe(companion);
+    } finally {
+      await artifact?.disposeAsync();
+      await retirePluginCache(cache);
+      fs.rmSync(captureState, { recursive: true, force: true });
+    }
+  });
+});
+
+it("keeps temporary native inspections from hardlinking rehearsal companions", async () => {
+  await withOpenClawTestState({ label: "native-rehearsal-companions" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const companion = path.join(fixture.root, "versions.json");
+    fs.writeFileSync(companion, '{"vips":"fixture"}');
+    const before = fs.statSync(companion, { bigint: true });
+    const cache = createPluginCache();
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    try {
+      artifact = withPluginCache(cache, () =>
+        withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () => {
+          preparePluginNativeAdmissions(fixture.index, cache);
+          return capturePluginGenerationArtifact(fixture.root);
+        }),
+      );
+      const captured = fs.realpathSync(artifact.resolve(companion));
+      expect(fs.readFileSync(captured, "utf8")).toBe('{"vips":"fixture"}');
+      expect(fs.statSync(companion, { bigint: true })).toMatchObject({
+        dev: before.dev,
+        ino: before.ino,
+        nlink: 1n,
+        ctimeNs: before.ctimeNs,
+      });
+      expect(fs.statSync(captured, { bigint: true }).ino).not.toBe(before.ino);
+      fs.writeFileSync(captured, "private inspection change");
+      expect(fs.readFileSync(companion, "utf8")).toBe('{"vips":"fixture"}');
+    } finally {
+      await artifact?.disposeAsync();
+      await retirePluginCache(cache);
+    }
+  });
+});
 
 it.each(["state root", "temporary placement", "publication root"] as const)(
   "keeps native admission in its selected %s within one cache",

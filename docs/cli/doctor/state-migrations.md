@@ -250,8 +250,13 @@ the maintenance holds in the existing migration tables. It leaves valid in-fligh
 deletions with their lifecycle owner. For regular agents, quarantine retains a
 safe deletion tombstone until explicit restoration; it never resurrects a deleted
 agent merely by archiving malformed cleanup details. Recovery preserves held
-stores; it does not migrate or retire them. Runtime admission remains separate
-from Doctor's repair holds. Review the paths and use the
+stores. After missing-table reconstruction, Doctor automatically restores a
+configured agent's matching database after verifying its ownership metadata,
+absence of a deletion record, and a rollback backup of the database and shared
+recovery records. An intervening OpenClaw upgrade does not disqualify the store.
+Quarantined deletion records and unconfigured or mismatched stores still require
+explicit restoration. Runtime admission remains separate from Doctor's repair
+holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore
@@ -321,7 +326,7 @@ together after that batch is verified. Enumeration advances through the complete
 archive key, including empty historical session IDs. A failed batch reports its archive session
 and generation and stops; rerunning Doctor resumes after the committed cursor.
 Blobs already committed before a file or cursor failure remain retained and pending
-publication. SIGINT and SIGTERM cancel further inspection and repair batches through Doctor's existing
+publication. SIGINT, SIGTERM, and SIGHUP cancel further inspection and repair batches through Doctor's existing
 maintenance owner, which settles open work and attempts to restore the managed
 Gateway it stopped. Doctor reports restoration failures and the next recovery
 action. Updates use the same migration and keep their existing backup and rollback
@@ -383,3 +388,35 @@ If the installed plugin still has not reported migration completion, run
 remaining warning to the plugin maintainer. Repeating a package update alone
 does not prove that the plugin migrated its retained state. Keep the retained
 state and config inputs until the migration owner reports completion.
+
+## Plugin migration recovery coverage
+
+The message that pre-repair state was retained at a `manifest.json` path confirms
+that Doctor saved a recovery copy. It is informational: keep that copy for manual
+recovery; no repair is needed just because the copy exists.
+
+A warning that a plugin's migration recovery coverage is unknown means the plugin
+has not declared its additional recovery resources. It does not mean data was
+lost or that the plugin's shared SQLite records were excluded. This warning can
+reappear on each new recovery inventory until the plugin supplies a declaration.
+Deleting an old recovery copy does not fix it.
+
+Update the plugin to a version with migration backup support. Until then, keep a
+separate backup of its configured data before relying on recovery, and ask its
+maintainer to add backup support. Plugin authors should declare external files
+and databases through `collectBackupResources`; an explicit empty list is
+appropriate for migrations that change only core-captured state or have no data
+resources. See the [plugin migration contract](/plugins/sdk-migration/compatibility-policy).
+
+Bundled Canvas and Memory Core migrations declare their legacy data sources.
+Crabbox's shared SQLite records are core-captured; the retired Workboard check
+leaves its legacy rows unchanged. QMD retirement removes only empty directories
+and disposable stale coordination locks, so it has no additional data to retain.
+These declarations prevent misleading missing-inventory warnings without hiding
+warnings about failed migrations or unresolved state.
+
+Declarations apply when the installed Doctor or updater creates a new recovery
+copy. They do not add resources to an original capture already created by an
+older installed updater. Keep those retained copies, and do not assume an older
+capture includes newly declared external resources. A recovery copy is evidence
+for manual recovery; its existence alone does not guarantee automatic rollback.

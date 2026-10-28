@@ -153,9 +153,6 @@ it("checks live admission at commit and keeps a refused operation replayable", a
 });
 
 function loseNextAdmissionOutcome() {
-  vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-    () => {},
-  );
   const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
   vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
     (admit, attachment) => {

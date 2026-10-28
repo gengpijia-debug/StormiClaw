@@ -1,5 +1,4 @@
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
@@ -49,21 +48,12 @@ function fixture() {
       throw new Error("Exec authorizations retain their custom admission");
     },
     stateOptions: () => options,
-    write: (operation, transactionOptions) => {
-      const { port1, port2 } = new MessageChannel();
-      try {
-        return workerAdmission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-          stateDatabase.runOpenClawStateWriteTransaction(
-            operation,
-            { ...options, database },
-            transactionOptions,
-          ),
-        );
-      } finally {
-        port1.close();
-        port2.close();
-      }
-    },
+    write: (operation, transactionOptions) =>
+      stateDatabase.runOpenClawStateWriteTransaction(
+        operation,
+        { ...options, database },
+        transactionOptions,
+      ),
   };
   return { context, database };
 }

@@ -6,10 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type {
-  HarnessCompletionRecovery,
-  RestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-types.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -156,6 +153,14 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
   );
 }
 
+export function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+    (payload.audioAsVoice === true && hasReplyPayloadMedia(payload))
+  );
+}
+
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
@@ -223,16 +228,6 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
-  readCurrentSession?: () =>
-    | {
-        sessionId: string;
-        lifecycleRevision?: string;
-        activeWriterRunId?: string;
-        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
-        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
-      }
-    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -324,11 +319,13 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
-   * still the live delivery vehicle; this mirror makes the reply durable for
-   * chat.history and page reloads without turning the internal UI into an
-   * outbound channel.
+   * the live delivery vehicle unless transcriptOwner identifies an already
+   * committed reply delivered through session.message/history. The mirror
+   * makes replies durable without turning the internal UI into an outbound channel.
    */
   sourceReplyTranscriptMirror?: {
     sessionKey: string;

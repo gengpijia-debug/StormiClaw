@@ -9,7 +9,6 @@ import {
   applySessionEntryReplacements,
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
@@ -46,7 +45,10 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
+import {
+  settleAcceptedRestartRecovery,
+  settleRejectedRestartRecovery,
+} from "./main-session-restart-dispatch-settlement.js";
 import {
   dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
@@ -54,7 +56,7 @@ import {
 } from "./main-session-restart-dispatch-start.js";
 import {
   announceRestartRecoveryResumption,
-  captureRestartRecoveryDeliveryCurrent,
+  isRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
 import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
@@ -163,7 +165,6 @@ type ResumeMainSessionParams = {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
-  assertCompletionCurrent?: () => void;
   recoveryAttempt: number;
   storePath: string;
   sessionKey: string;
@@ -179,31 +180,18 @@ type ResumeMainSessionParams = {
 export async function resumeMainSession(
   params: ResumeMainSessionParams,
 ): Promise<MainSessionResumeResult> {
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
-  const isCurrent = () => {
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    source?.admissionSignal?.throwIfAborted();
-    claim?.assertCurrent();
-    return (
-      (source
-        ? source.actor.sessions.readCapability(params.sessionKey)?.sessionId
-        : loadExactSessionEntry({ ...params, readConsistency: "latest" })?.entry.sessionId) ===
-      params.entry.sessionId
-    );
-  };
   return (
     (await runWithMainSessionRecoveryAdmission({
       ...params,
       sessionId: params.entry.sessionId,
       admission: params.recoveryAdmission,
-      isCurrent,
+      isCurrent: () =>
+        loadExactSessionEntry({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          readConsistency: "latest",
+        })?.entry.sessionId === params.entry.sessionId,
       run: (recoveryAdmission) =>
         resumeMainSessionWithinAdmission({
           ...params,
@@ -221,24 +209,8 @@ async function resumeMainSessionWithinAdmission(
     return "skipped";
   }
   const harnessCompletion = params.entry.restartRecoveryHarnessCompletion;
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
-  const taskRemainsOwed = () => {
-    params.assertCompletionCurrent?.();
-    if (!harnessCompletion) {
-      return true;
-    }
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    claim?.assertCurrent();
-    const entry = source ? source.actor.sessions.readSteering(params.sessionKey) : params.entry;
-    return Boolean(entry && getOwedHarnessCompletionTask(harnessCompletion, entry));
-  };
+  const taskRemainsOwed = () =>
+    !harnessCompletion || Boolean(getOwedHarnessCompletionTask(harnessCompletion, params.entry));
   if (!taskRemainsOwed()) {
     return "skipped";
   }
@@ -283,18 +255,6 @@ async function resumeMainSessionWithinAdmission(
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   };
-  const isDeliveryCurrent = deliveryContext
-    ? captureRestartRecoveryDeliveryCurrent({
-        ...target,
-        sessionKey: dispatchSessionKey,
-        sessionId: params.entry.sessionId,
-        recoveryRunId,
-        lifecycleGeneration,
-        deliveryContext,
-        cfg: params.cfg,
-        shouldContinue: params.shouldContinue,
-      })
-    : undefined;
   const settlementTarget = {
     ...target,
     expectedRecoveryRunId: recoveryRunId,
@@ -589,13 +549,22 @@ async function resumeMainSessionWithinAdmission(
           agentId: params.agentId,
           runId: recoveryRunId,
           isCurrent: (cfg) =>
-            !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent?.(cfg) === true,
+            !dispatchSettled &&
+            taskRemainsOwed() &&
+            isRestartRecoveryDeliveryCurrent({
+              ...target,
+              sessionKey: dispatchSessionKey,
+              sessionId: params.entry.sessionId,
+              recoveryRunId,
+              lifecycleGeneration,
+              deliveryContext,
+              cfg,
+              shouldContinue: params.shouldContinue,
+            }),
         });
       }
       await announceRestartRecoveryResumption({
         ...target,
-        isCurrent: (cfg) =>
-          !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent?.(cfg) === true,
         sessionKey: dispatchSessionKey,
         sessionId: params.entry.sessionId,
         recoveryRunId,
@@ -662,10 +631,11 @@ async function resumeMainSessionWithinAdmission(
         await repairAcceptedRecovery();
       }
     }
+    let rollback: Awaited<ReturnType<typeof rollbackReservation>>;
     if (reservation) {
       const rollbackKind =
         dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation";
-      await rollbackReservation(rollbackKind).catch((rollbackError: unknown) => {
+      rollback = await rollbackReservation(rollbackKind).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
@@ -674,10 +644,23 @@ async function resumeMainSessionWithinAdmission(
           kind: rollbackKind,
           reservation: reservation!,
         });
+        return undefined;
       });
     }
     if (params.shouldContinue?.() === false) {
       return "skipped";
+    }
+    const rejected = await settleRejectedRestartRecovery({
+      ...target,
+      cfg: params.cfg,
+      dispatchAccepted,
+      error,
+      gatewayRuntime: params.gatewayRuntime,
+      rollback,
+      shouldContinue: params.shouldContinue,
+    });
+    if (rejected) {
+      return rejected;
     }
     log.warn(
       `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,

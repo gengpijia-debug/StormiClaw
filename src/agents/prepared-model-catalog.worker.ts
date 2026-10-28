@@ -23,8 +23,13 @@ import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expi
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import {
+  listManifestSyntheticAuthProviderRefs,
+  resolveRuntimeSyntheticAuthProviderRefs,
+} from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -77,7 +82,7 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -282,6 +287,9 @@ async function runCatalogRequest(
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
             [
               ...new Set([
+                ...listManifestSyntheticAuthProviderRefs(
+                  pluginGenerationScope.metadataSnapshot.index,
+                ),
                 ...resolveRuntimeSyntheticAuthProviderRefs(),
                 ...request.syntheticAuth.map(({ providerRef }) => providerRef),
               ]),
@@ -523,6 +531,13 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      const successor = getPluginRegistryInspectionResources(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (!successor) {
+        throw new Error("Catalog scope growth has no inspection resource owner");
+      }
+      successor.adoptRetainedRegistrations(prepared.pluginGeneration.pluginRegistry);
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
@@ -608,6 +623,7 @@ if (parentPort) {
           let previous = contexts.get(workspaceDir);
           const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
           let attempted: WorkerGeneration | undefined;
+          let replacing = false;
           try {
             const work = new AsyncWorkScope();
             const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
@@ -621,6 +637,7 @@ if (parentPort) {
                       if (previous?.fingerprint === fingerprint) {
                         return previous.prepared;
                       }
+                      replacing = true;
                       return (attempted = await prepareWorkerGeneration(value));
                     },
                     async () => {
@@ -640,6 +657,7 @@ if (parentPort) {
             if (attempted && result.status === "ok") {
               contexts.set(workspaceDir, { fingerprint, prepared: attempted });
               attempted = undefined;
+              replacing = false;
               // Acquire the replacement before releasing shared source registrations.
               await previous?.prepared.release();
               // Registry custody can retain this request's async context until retirement.
@@ -648,7 +666,16 @@ if (parentPort) {
             }
             return result;
           } finally {
-            await attempted?.release();
+            try {
+              if (replacing) {
+                // Registration can replace module-level API handles before a refresh fails.
+                // Re-register the requested config next time instead of reusing that context.
+                contexts.delete(workspaceDir);
+                await previous?.prepared.release();
+              }
+            } finally {
+              await attempted?.release();
+            }
           }
         },
         data.sourceCaptureManagedRoot,

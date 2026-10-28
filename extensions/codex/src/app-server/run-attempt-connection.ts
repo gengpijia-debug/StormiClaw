@@ -65,10 +65,10 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
+  const attemptStartedAtMonotonicMs = performance.now();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const codexModelCallTrace = freezeDiagnosticTraceContext(
     createDiagnosticTraceContextFromActiveScope(),
@@ -164,7 +164,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   let shellEnvironment = baseShellEnvironment;
   let shellPathPrepend: readonly string[] | undefined;
-  let shellGitConfigParameters: string | undefined;
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
     // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
@@ -172,16 +171,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
     // Resolve placement before projecting host PATH; socket peers and remote workspaces
     // own their tool lookup even when their control connection runs on this machine.
-    const ownedLocalProcess =
+    const localToolEnv =
       !sandbox?.enabled &&
       !remoteExec &&
       appServer.start.transport === "stdio" &&
       !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot;
-    const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
-    shellGitConfigParameters = ownedLocalProcess
-      ? preparedEnvironment?.localGitConfigParameters
-      : undefined;
+      !appServer.remoteWorkspaceRoot
+        ? preparedEnvironment?.localToolEnv
+        : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
     shellEnvironment = hasLocalToolEnv
@@ -189,18 +186,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       : baseShellEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    const prepared = shellEnvironment
+    return shellEnvironment
       ? {
           ...appServer,
           start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
         }
       : appServer;
-    return shellGitConfigParameters
-      ? {
-          ...prepared,
-          start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
-        }
-      : prepared;
   };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -595,6 +586,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       releaseModelExecution,
       options,
       attemptStartedAt,
+      attemptStartedAtMonotonicMs,
       profilerEnabled,
       codexModelCallTrace,
       codexModelContentCapture,
@@ -615,7 +607,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       agentDir,
       shellEnvironment,
       shellPathPrepend,
-      shellGitConfigParameters,
       disableLoginShell,
       bindingIdentity,
       bindingStore,

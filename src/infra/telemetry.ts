@@ -105,7 +105,12 @@ function isAutomatedEnvironment(): boolean {
 }
 
 function isUpdateCheckDisabled(config: OpenClawConfig): boolean {
-  return true;
+  return (
+    config.update?.checkOnStart === false ||
+    isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) ||
+    isAutomatedEnvironment() ||
+    resolveIsNixMode()
+  );
 }
 
 function isDoNotTrackEnabled(): boolean {

@@ -444,6 +444,19 @@ function planTerminalCompletion(
     };
     entry.cleanupHandled = false;
     entry.terminalOwner = "interrupted-recovery";
+    if (!entry.collect && !suppressSessionEffects) {
+      // Unfinished work needs its history even when successful completion would delete it.
+      entry.cleanup = "keep";
+      if (entry.expectsCompletionMessage === false && entry.completionRequesterSessionId) {
+        // Quiet completion does not waive continuation after a restart. Keep the
+        // handoff private and bound to the requester captured before launch.
+        // Sessions created without a lifecycle revision (for example by the
+        // `agent` RPC) bind by session id plus the absent revision; a later reset
+        // assigns one, so the requester identity check still rejects replacements.
+        entry.completionTarget = "parent";
+        entry.requesterTurnRunId = undefined;
+      }
+    }
   }
   const sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
   if (
@@ -456,12 +469,9 @@ function planTerminalCompletion(
         entry.killReconciliation === undefined &&
         entry.pauseReason === undefined &&
         typeof entry.execution.endedAt === "number" &&
-        Number.isFinite(entry.execution.endedAt) &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        Number.isFinite(entry.cleanupCompletedAt) &&
-        entry.cleanupCompletedAt >= entry.execution.endedAt))
+        Number.isFinite(entry.execution.endedAt)))
   ) {
-    // A delayed abort must not replace a finalized result or reopen a cleaned cancellation.
+    // A delayed abort must not replace a finalized result or reopen a confirmed cancellation.
     return undefined;
   }
   if (shouldPreservePublishedExplicitRunTimeout(entry)) {

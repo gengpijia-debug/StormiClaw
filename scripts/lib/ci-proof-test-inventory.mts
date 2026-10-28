@@ -41,6 +41,7 @@ export function isCiProofTestFile(file: string): boolean {
 // Runtime integration and released-state matrices retain their canonical Vitest
 // owners, but automatic CI runs them only when the test itself changes.
 export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
+  "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts",
   "src/agents/agent-bundle-mcp-retention.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
   "src/agents/mcp-stdio-client.cleanup.real.test.ts",
@@ -1882,6 +1883,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/update-cli/update-command-terminal-outcome.test.ts",
   "src/cli/update-cli/update-command-terminal-triage.test.ts",
   "src/cli/update-cli/update-command-timeouts.test.ts",
+  "src/cli/update-cli/update-command-verification-package-replacement.test.ts",
   "src/cli/update-cli/update-command-verification.test.ts",
   "src/cli/update-cli/update-config-provenance.integration.test.ts",
   "src/cli/update-cli/update-execution.runtime.test.ts",
@@ -2480,6 +2482,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-publication-admission.test.ts",
   "src/gateway/github-publication-boundaries.test.ts",
+  "src/gateway/github-publication-deferred-profile.test.ts",
   "src/gateway/github-publication-personal-pending.test.ts",
   "src/gateway/github-publication-requester-aliases.test.ts",
   "src/gateway/github-publication-requester.test.ts",
@@ -3830,6 +3833,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/install-smoke-no-push-workflow.test.ts",
   "test/scripts/ios-lifecycle-workflow.test.ts",
   "test/scripts/ios-release-fastlane-gates.test.ts",
+  "test/scripts/ios-release-screenshot-upload.test.ts",
   "test/scripts/kitchen-sink-rpc-walk.test.ts",
   "test/scripts/labeler-extension-coverage.test.ts",
   "test/scripts/lint-status.test.ts",

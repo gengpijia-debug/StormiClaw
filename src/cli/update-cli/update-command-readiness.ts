@@ -50,6 +50,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
+  waitForStartup?: boolean;
 }): Promise<boolean> {
   const { config, env } = params;
   const { assertCurrent, proofOptions } = captureUpdateGatewayReadinessOwner(params);
@@ -105,7 +106,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       }
       const expectedVersion = params.expectedVersion ?? installedVersion;
       progress("readiness", `checking service and listener identity on port ${port}`);
-      const { health, readyz } = await observeUpdateGatewayReadiness({
+      const { health, readyz, http } = await observeUpdateGatewayReadiness({
         serviceEnv: env,
         gatewayPort: port,
         expectedVersion: expectedVersion ?? undefined,
@@ -114,25 +115,22 @@ export async function verifyPreviousGatewayForUpdate(params: {
         probeTimeoutMs: 5_000,
         deadlineMs: deadline.deadlineMs,
         requireRunningService: true,
+        waitForStartup: params.waitForStartup,
         settle: { probes: 1 },
         signal: deadline.signal,
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
-      if (health.waitOutcome === "timeout" || health.waitOutcome === "still-starting") {
-        progress(health.waitOutcome, lastReason, true);
+      if (!health.healthy || !(http?.coreReady ?? readyz)) {
+        progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
       progress("installation", "checking service command ownership of the previous installation");
       const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
       assertCurrent();
       return Boolean(
-        expectedVersion &&
-        servesPreviousPackage === true &&
-        health.healthy &&
-        health.runtime.status === "running" &&
-        readyz,
+        expectedVersion && servesPreviousPackage === true && health.runtime.status === "running",
       );
     });
   } catch (error) {
@@ -196,7 +194,7 @@ export type UpdateGatewayReadinessParams = {
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
-  /** A failure before activation observes existing health without waiting for startup. */
+  /** Observe an existing process without waiting for startup. */
   waitForStartup?: boolean;
   settle?: { probes: number };
   signal?: AbortSignal;
@@ -226,7 +224,6 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     !health.versionMismatch &&
     !health.buildIdMismatch &&
     !health.activatedPluginErrors?.length &&
-    !health.channelProbeErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -268,6 +265,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: params.requirePluginHealth ?? false,
+    requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
     deadline,
@@ -349,7 +347,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.versionMismatch ||
           health.buildIdMismatch ||
           health.activatedPluginErrors?.length ||
-          health.channelProbeErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };
@@ -361,6 +358,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       http = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port: params.gatewayPort,
           attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
@@ -409,7 +407,10 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.probeError = "Gateway process changed during final readiness verification.";
         }
       }
-      if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+      if (
+        health.waitOutcome !== "generation-changed" &&
+        (!(http.coreReady ?? readyz) || remainingMs() === 0)
+      ) {
         health = {
           ...health,
           healthy: false,

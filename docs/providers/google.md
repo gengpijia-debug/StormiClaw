@@ -11,6 +11,7 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
+- Default model: `google/gemini-4-argon`
 - Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
 - Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
@@ -46,7 +47,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: "google/gemini-4-argon" },
             },
           },
         }
@@ -64,8 +65,7 @@ the Gateway already runs inside a managed Google Cloud environment.
     </Tip>
 
     With a configured API key, OpenClaw refreshes Google AI Studio's text-model
-    catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
-    and Flash-Lite variants therefore appear in
+    catalog from the Gemini `models.list` API. Supported Gemini text models therefore appear in
     `openclaw models list --provider google` without waiting for an OpenClaw
     release. Failed refreshes report the failure and retain the last successful
     inventory, or bundled models before the first success. A successful empty
@@ -215,8 +215,19 @@ the Gateway already runs inside a managed Google Cloud environment.
 </Tabs>
 
 <Note>
-`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-3.1-pro-preview` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) rewrites a stale configured default to the current model.
+`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-4-argon` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) updates the configured primary model to `google/gemini-4-argon`.
 </Note>
+
+## Gemini 4 Argon
+
+`google/gemini-4-argon` is available in the bundled catalog, with a 1,048,576-token
+context window and up to 65,536 output tokens. `google/gemini-4` is its shorthand;
+the same model ID and shorthand are available for `google-vertex`.
+
+Gemini 4 Argon supports text, image, audio, video, and PDF inputs, function
+calling, structured outputs, and search grounding. It uses implicit context
+caching only: explicit `cachedContents` handles and the Live API are not
+supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
 
 ## Capabilities
 
@@ -238,6 +249,13 @@ Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
 OpenClaw preserves their partial content and reports a length-limited result.
 Function calls in that partial response remain incomplete instead of becoming
 an executable tool-use turn.
+
+The managed Gemini and Vertex transports stop reading when a compatible proxy
+sends `data: [DONE]`, release the response body, and ignore later frames. A valid
+candidate finish reason is still required for a successful result. First-frame
+quota errors participate in API-key rotation. For Gemini's first-response retry,
+usage metadata, response IDs, and empty or unspecified finish states do not count
+as generated output or disable the existing retry deadline.
 
 ## Web search
 
@@ -270,15 +288,18 @@ Gemini web search reuses `models.providers.google.baseUrl`. See
 [Gemini search](/tools/gemini-search) for the provider-specific tool behavior.
 
 <Tip>
-Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
-Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to
+Gemini 3 and Gemini 4 models use `thinkingLevel` rather than `thinkingBudget`.
+OpenClaw maps these models and `gemini-*-latest` alias reasoning controls to
 `thinkingLevel` so default/low-latency runs do not send disabled
 `thinkingBudget` values.
 
 `/think adaptive` keeps Google's dynamic thinking semantics instead of choosing
-a fixed OpenClaw level. Gemini 3 and Gemini 3.1 omit a fixed `thinkingLevel` so
+a fixed OpenClaw level. Gemini 3 and Gemini 4 omit a fixed `thinkingLevel` so
 Google can choose the level; Gemini 2.5 sends Google's dynamic sentinel
 `thinkingBudget: -1`.
+
+Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
+`off` to `low`, because thinking cannot be fully disabled on this model.
 
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
@@ -629,13 +650,16 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     this route; use `google-generative-ai` for that feature.
 
     Interrupted text replies use the normal transient-error retry and failover
-    policy. Malformed completed tool-call arguments remain rejected.
+    policy. Malformed streaming JSON fails the request instead of silently
+    dropping content. Malformed completed tool-call arguments remain rejected.
 
   </Accordion>
 
   <Accordion title="Direct Gemini cache reuse">
     For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw
-    passes a configured `cachedContent` handle through to Gemini requests.
+    passes a configured `cachedContent` handle through to supported Gemini models.
+    Gemini 4 Argon supports implicit caching only; do not configure an explicit
+    cache handle for it.
 
     - Configure per-model or global params with either
       `cachedContent` or legacy `cached_content`

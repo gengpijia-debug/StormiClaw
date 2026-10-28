@@ -28,8 +28,6 @@ import {
   loadExactSessionEntryReadOnly,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -392,7 +390,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 function resolveSessionKeyForRequestInternal(
-  opts: SessionRequest & { createMissingSessionId: boolean; prepareBoundEntry?: boolean },
+  opts: SessionRequest & { createMissingSessionId: boolean },
 ): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -494,16 +492,7 @@ function resolveSessionKeyForRequestInternal(
   // Exclusion and lookup share the persisted locator; routing keeps the request key.
   const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    storeSessionKey &&
-    !isInternalSessionEffectsKey(storeSessionKey) &&
-    !(
-      opts.prepareBoundEntry &&
-      captureIncognitoSessionSource({
-        agentId: storeAgentId,
-        storePath,
-        sessionKey: storeSessionKey,
-      })
-    )
+    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
       ? loadExactSessionEntryReadOnly({
           agentId: storeAgentId,
           storePath,
@@ -590,24 +579,9 @@ export async function resolveSession(
   const {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry: routedEntry,
+    sessionEntry,
     storePath,
-  } = resolveSessionKeyForRequestInternal({
-    ...opts,
-    createMissingSessionId: true,
-    prepareBoundEntry: true,
-  });
-  const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
-  const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
-      ? await readSessionEntryReadOnlyInWorker(
-          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
-          () => {
-            opts.signal?.throwIfAborted();
-            opts.assertCurrent?.();
-          },
-        )
-      : routedEntry;
+  } = resolveSessionKeyForRequestCore(opts);
   const now = Date.now();
 
   const sessionAgentId =

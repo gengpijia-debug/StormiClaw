@@ -250,7 +250,9 @@ was denied. Without JavaScript, the generic unavailable page remains readable.
 Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
-in memory only. This also works on loopback HTTP, which permits public readers.
+in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
+reloadable during Gateway updates; the temporary recovery marker is removed when
+the app starts.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only
@@ -271,9 +273,7 @@ and you are its creator or a Gateway admin. See
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
 roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting in the Control UI's
-chat layout and typeface, offers a copy control on code blocks, and closes with a
-short OpenClaw introduction for readers who are new to it. Tool output,
+messages and assistant final answers with Markdown formatting. Tool output,
 reasoning, files, images, executable widgets, internal metadata, and hidden
 messages are omitted. Credential-pattern redaction is best effort, not a
 guarantee that sensitive prose is detected. Review the conversation before

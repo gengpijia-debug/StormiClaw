@@ -334,42 +334,6 @@ synchronous compatibility paths; receipt publication does not migrate their SQL
 to a worker. There is no schema, stored-byte, retention, durability, permission,
 or update-format change.
 
-### Approval, placement, and workspace receipts
-
-Managed approval and exec writers capture exact row postimages and deletion
-facts in their mutation statements. Approval expiry and corrupt-row repair are
-writers too. Effective exec policy and usage accounting remain separate domains:
-recording a use does not advertise a new policy. Existing cron grant and
-resolution receipts retain their settlement meaning alongside those facts.
-
-Environment receipts replace each affected environment's complete environment,
-credential, and attachment tuple, including explicit absence. Placement receipts
-retain exact turn, tool, pending-result, and journal-presence facts through the
-existing authority owner. Committed facts install when native commit evidence
-arrives, before the ordinary reply; the writer queue still owns accepted work
-until settlement. A lost reply never triggers mutation replay.
-
-Workspace setup, aliases, attestation sets, local and repository workspaces, and
-node prepared-workspace lifecycle operations publish through their existing
-native or worker kernels. Deletion remains a tombstone, and newer native changes
-supersede delayed worker postimages. All domains in a compound receipt install
-before public observers. Nested rollback discards tentative facts; a confirmed
-rollback preserves the previous committed projection. Missing accepted receipts,
-unknown settlement, or failed installation invalidate the affected domain.
-
-This coverage applies to the named managed writers. Standing-grant generation
-companions, cascade child identities, and cron-specific worker transport of grant
-revocations remain incomplete. Move error/cancellation paths retain explicit
-invalidation instead of claiming a complete move postimage. Raw handles,
-unmanaged trigger or cascade effects, and offline Doctor relocation/import also
-remain outside this coverage. Final exec, node-dispatch, placement, and workspace authority guards
-remain in place. Receipt publication grants no permission and no cross-store
-exclusion. The Gateway owns runtime writes; other processes use its APIs or write
-only while it is stopped. No runtime freshness probes are added.
-
-Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
-Released synchronous methods still commit and install their facts before returning.
-
 ### Foreign observation and recertification
 
 The shared-state current-reader owner retains one unpinned probe connection per
@@ -1865,36 +1829,6 @@ no schema, stored bytes, durability, retention, permissions, or update migration
 it claims no incognito T1 retirement. The production owner selection and native
 selector deletion remain a later atomic cutover.
 
-### Incognito command, CLI, and harness consumers (P03, inactive)
-
-Explicit actor bindings now carry command admission, CLI history and compaction,
-harness consent, node grants, sandbox classification, and session lineage through
-their existing owners. Asynchronous preparation reads the captured actor. Final
-synchronous guards consume its finite committed policy and identity facts, which
-publish before observers and reflect later revocation. They do not cache full
-session rows, query the actor queue, or probe for foreign commits.
-
-CLI transcript recording captures its actor before accepting events. Its ordered
-queue settles accepted appends before finalization returns, including stop and
-timeout salvage. Model rollback and final-delivery guards retain that same actor
-for delayed callbacks. Cancellation snapshots read current facts without waiting
-behind the run being stopped. Same-process restart recovery retains exact input
-source predicates through admission and delivery; shutdown marking excludes
-volatile stores from durable restart discovery.
-
-Partial transcript markers and store-plus-session-ID targets use the existing
-noncreating target readers. An explicitly selected absence remains missing and
-cannot discover a durable replacement; an ended actor remains ended. Standalone
-CLI diagnostics cannot inspect another process's private actor and keep their
-existing missing-session or warning result.
-
-This composition is inactive: production incognito acquisition remains host-owned
-until P12, and ordinary unbound calls allocate no actor. Native selectors remain
-for that production route, with worker-local kernels, detached SessionManagers,
-and documented deprecated durable SDK adapters retained under their own contracts.
-No schema, retention, permission, content limit, or update migration changes are
-introduced, and no incognito T1 retirement is claimed.
-
 ### Incognito SDK history preparation (P04, inactive)
 
 Async SDK history reads retain their explicitly selected actor and physical store.
@@ -2501,11 +2435,30 @@ reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
+While an offline maintenance scope retains a shared-state worker, its scheduled
+WAL work pauses so Doctor and update-recovery captures keep stable source bytes.
+Explicitly admitted maintenance remains available. The final maintenance client
+release resumes the same worker's normal ten-second checkpoint cadence; overlapping
+maintenance clients keep it paused until all release.
+When another process holds offline maintenance custody, the state owner check
+still refuses each scheduled pass. That refusal skips the pass without recording a
+checkpoint failure or warning; health keeps its last real observation and the next
+tick retries.
 
-Worker authority requests wait for the retained host owner's grant or refusal;
-host scheduling delays do not expire that authority. The host still checks current
-authority before granting, and broker failure joins worker exit before releasing
-custody. Native SQLite and broker-capacity admission keep their own deadlines.
+Worker authority requests retain their unbounded live-owner wait unless the caller
+explicitly supplies a `deadlineMs` budget. Only cron's runtime mutation preparation
+and outcome-retention calls opt in to 1,000 ms. Its two handshakes leave 3,000 ms of
+other writers' 5,000 ms busy budget for SQL and rollback. A timeout atomically
+cancels the request and throws a retryable admission error; the synchronous
+transaction rolls back before native settlement releases custody. The host ignores
+late requests and cannot grant a canceled request. Other transaction and commit
+callers, as well as open and preparation requests, keep their existing unbounded wait.
+The host still checks current authority before granting, and broker failure joins
+worker exit before releasing custody. Cron warns and retries through its scheduler,
+preserving startup recovery mode and durable reservation markers. Unknown outcomes
+remain recovery-owned and are never blindly retried. No schema, configuration,
+stored-data, or update/rollback migration changes are required. Native SQLite and
+broker-capacity admission keep their own deadlines.
 Startup, schema work, and offline maintenance use the installation's single
 process owner. Ordinary writes acquire their actual SQLite transaction; they do
 not acquire a separate coordination database or carry a lock-directory namespace.
@@ -3765,6 +3718,12 @@ including unchanged projection revisions, and returns only matching messages.
 Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
+The archive FIFO retains one idle worker after successful scopes and can hand it
+to the next scope using the same captured state directory. Each request closes
+its native handles before handoff; the new scope supplies its own authority.
+Released scopes refuse further work, and the idle worker does not keep the process
+alive. Failures, database shutdown, different state directories, and retiring
+workers still require native exit before replacement. Schema and update behavior are unchanged.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

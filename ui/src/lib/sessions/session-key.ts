@@ -81,15 +81,8 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
-  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key)) {
-    return false;
-  }
-  if (row.sidebarRoot) {
-    return true;
-  }
-  if (normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);

@@ -19,7 +19,6 @@ import {
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -38,6 +37,7 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -68,7 +68,7 @@ import { assertUpdatePackageActivationAdmission } from "./update-command-package
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
-import type { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -153,7 +153,7 @@ export async function resolveUpdateCommandTarget(
         timeoutMs,
       } = prepared;
       // Initialization and confirmations can outlive the earlier admission snapshot.
-      const pkgOwnership = createFreeBsdPkgOwnershipInspection(updateStepTimeoutMs);
+      const pkgOwnership = createSystemPackageOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
@@ -409,7 +409,6 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         recoveryState.triageTarget.root = root;
         recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-        packageInstallEnv = await createGlobalInstallEnv();
         installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
         const manager = await resolveGlobalManager({
           root,
@@ -452,6 +451,7 @@ export async function resolveUpdateCommandTarget(
           packageName: installedPackageName,
           pkgOwnership,
         });
+        packageInstallEnv = await createGlobalInstallEnv(undefined, packageInstallTarget);
         if (packageInstallTarget.manager === "npm") {
           const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
           if (destination.kind !== "owned" && destination.kind !== "empty") {
@@ -596,6 +596,34 @@ export async function resolveUpdateCommandTarget(
           endedAtMs: Date.now(),
         },
       });
+      if (
+        updateInstallKind === "package" &&
+        !opts.dryRun &&
+        !packageAlreadyCurrent &&
+        canResolveRegistryVersionForPackageTarget(packageInstallSpec ?? tag) &&
+        packageRuntimeTarget?.nodeEngine
+      ) {
+        // Candidate admission can stage before the activation runtime check.
+        const runtime = await resolvePackageRuntimePreflight({
+          engineOnly: true,
+          channel,
+          requestedChannel,
+          target: packageRuntimeTarget,
+          root,
+          nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
+          timeoutMs: updateStepTimeoutMs,
+        });
+        if (!runtime.ok) {
+          await refuseUpdate(
+            "preflight-node-runtime-incompatible",
+            runtime.error,
+            runtime.failureFacts,
+            runtime.recoverySteps,
+          );
+          return undefined;
+        }
+      }
+
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
       if (
         updateInstallKind === "package" &&

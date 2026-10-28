@@ -1,11 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { registerListener } from "../../shared/listeners.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
@@ -16,6 +15,7 @@ import {
   digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { assertShape } from "./store-validation.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
@@ -96,7 +96,7 @@ function createWorkerEnvironmentProjection() {
   let reconcilable: WorkerEnvironmentRecord[] | undefined;
   const assertActive = () => {
     if (!active) {
-      throw new Error("Worker environment inventory has closed");
+      throw new WorkerEnvironmentInventoryClosedError();
     }
   };
   const assertReadable = (
@@ -130,7 +130,6 @@ function createWorkerEnvironmentProjection() {
     reconcilable = undefined;
   };
   return {
-    incarnation: randomUUID(),
     get active() {
       return active;
     },
@@ -236,10 +235,8 @@ function createWorkerEnvironmentProjection() {
     },
     publishCredentialRevoked(environmentId: string) {
       assertActive();
-      const failures: unknown[] = [];
-      notifyListeners(revocationListeners, environmentId, (error) => failures.push(error));
-      if (failures.length) {
-        throw new AggregateError(failures, "Worker environment revocation publication failed");
+      for (const listener of revocationListeners) {
+        listener(environmentId);
       }
     },
     install(facts: WorkerEnvironmentFacts, revision: number, notify = true) {

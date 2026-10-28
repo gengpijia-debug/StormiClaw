@@ -1,6 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import type { SessionEventSourcePolicy } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -142,6 +142,8 @@ export type RunCliAgentParams = {
   restoreCliSessionFork?: () => Promise<void>;
   /** Persist the successor ID as soon as the CLI reports the forked session. */
   persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
+  /** Bind a directly stopped first turn's flushed native session into an empty binding. */
+  persistStoppedFirstCliSession?: (binding: CliSessionBinding) => Promise<void>;
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
@@ -236,7 +238,7 @@ export function captureCliRunStartTime() {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */
-  sessionEventSourcePolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
@@ -277,6 +279,9 @@ export type PreparedCliRunContext = {
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
+  /** Only the exact resumed native session may receive these newly committed conversation rows. */
+  resumeContext?: string;
+  transcriptCursor?: CliSessionBinding["transcriptCursor"];
   /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
   cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
   authEpoch?: string;

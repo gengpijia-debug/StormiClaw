@@ -10,7 +10,10 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { readWithdrawnSessionPendingInputId } from "../config/sessions/session-accessor.pending-inputs.js";
-import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -20,6 +23,7 @@ import {
   registerUserTurnTranscriptAdmissionOwner,
 } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
+import * as transcriptPublication from "./user-turn-transcript-publication.js";
 import {
   capturePersistedModelPromptProjection,
   confirmPersistedSteerTargetRunId,
@@ -48,11 +52,6 @@ import type {
   UserTurnTranscriptTargetResolver,
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
-
-const originalInputCommitNotifiers = new WeakMap<
-  UserTurnTranscriptRecorder,
-  (anchor: TranscriptEntryAnchor) => void
->();
 
 export type {
   PersistedUserTurnMessage,
@@ -335,7 +334,7 @@ export function createUserTurnTranscriptRecorder(
       )
     ) {
       for (const source of params.pendingInputSources) {
-        originalInputCommitNotifiers.get(source)?.(commit.anchor);
+        transcriptPublication.notifyOriginalInputCommitted(source, commit.anchor);
       }
     }
     try {
@@ -436,6 +435,10 @@ export function createUserTurnTranscriptRecorder(
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
+        const assertOriginalInput =
+          candidate.idempotencyKey === message?.idempotencyKey
+            ? recorder.assertOriginalInputCommit
+            : undefined;
         const persist = () =>
           persistUserTurnTranscript({
             ...resolvedTarget,
@@ -447,10 +450,12 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
-            beforeFreshMessageCommit:
-              candidate.idempotencyKey === message?.idempotencyKey
-                ? recorder.assertOriginalInputCommit
-                : undefined,
+            beforeFreshMessageCommit: options.beforeFreshMessageCommit
+              ? composeSessionSourceAssertion([
+                  options.beforeFreshMessageCommit,
+                  assertOriginalInput,
+                ])
+              : assertOriginalInput,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
           });
         // Collection can resolve its media lazily during admission. Bind custody
@@ -692,6 +697,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
         retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {
@@ -714,7 +720,7 @@ export function createUserTurnTranscriptRecorder(
         cwd: options?.cwd,
       }),
   };
-  originalInputCommitNotifiers.set(recorder, (anchor) => {
+  transcriptPublication.registerOriginalInputCommitNotifier(recorder, (anchor) => {
     const sourceMessage = pendingInput?.message ?? resolvedSourceMessage ?? message;
     if (sourceMessage) {
       notifyOriginalInputCommitted({ message: sourceMessage, anchor });
@@ -732,8 +738,4 @@ export function createUserTurnTranscriptRecorder(
   return recorder;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.userTurnTranscriptTestApi")] = {
-    persistUserTurnTranscript,
-  };
-}
+transcriptPublication.publishUserTurnTranscriptTestApi({ persistUserTurnTranscript });

@@ -1132,10 +1132,10 @@ printf 'status=%s\\n' "$status"
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
     expect(runNonrootNodePreflight("22.23.2").status).toBe(1);
-    expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+    expect(runNonrootNodePreflight("24.22.1").status).toBe(0);
     expect(runNonrootNodePreflight("25.9.0").status).toBe(1);
     expect(runNonrootNodePreflight("26.0.0").status).toBe(1);
-    expect(runNonrootNodePreflight("26.1.0").status).toBe(0);
+    expect(runNonrootNodePreflight("26.12.1").status).toBe(0);
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {
@@ -2303,6 +2303,11 @@ if (args[0] === "--version") {
 } else if (args[0] === "gateway") {
   const port = Number(args[args.indexOf("--port") + 1]);
   http.createServer((_req, res) => {
+      if (_req.url === "/readyz") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ready: true }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok");
     })

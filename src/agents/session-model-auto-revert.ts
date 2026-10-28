@@ -5,15 +5,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import {
   createAgentPatchedSessionModelFallback,
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
@@ -40,7 +35,6 @@ async function reconcileAgentPatchedSessionModel(params: {
   outcome: SessionModelRunOutcome;
   expectedMarkerTs?: number;
   validatedFallback?: AgentPatchedSessionModelFallback;
-  assertCurrent?: () => void;
 }): Promise<void> {
   const reason = params.outcome.success
     ? undefined
@@ -51,14 +45,13 @@ async function reconcileAgentPatchedSessionModel(params: {
 
   let note: string | undefined;
   let sessionId: string | undefined;
-  const reconciledEntry = await patchSessionEntryCore(
+  await patchSessionEntryCore(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     (entry) => {
-      params.assertCurrent?.();
       const marker = entry.modelFallback;
       if (marker?.source !== "agent-patch") {
         return null;
@@ -104,11 +97,9 @@ async function reconcileAgentPatchedSessionModel(params: {
         liveModelSwitchPending: undefined,
       };
     },
-    { assertCommitAllowed: params.assertCurrent },
   );
   if (note && sessionId) {
     try {
-      params.assertCurrent?.();
       const timestamp = Date.now();
       await appendTranscriptMessage(
         {
@@ -116,8 +107,6 @@ async function reconcileAgentPatchedSessionModel(params: {
           sessionId,
           sessionKey: params.sessionKey,
           storePath: params.storePath,
-          expectedLifecycleRevision: reconciledEntry?.lifecycleRevision,
-          expectedWriterRunId: reconciledEntry?.activeWriterRunId,
         },
         {
           config: params.cfg,
@@ -144,17 +133,6 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
   assertReadCurrent?: () => void;
   onError?: (error: unknown) => void;
 }) {
-  const source = params.sessionKey ? captureIncognitoSessionSource(params) : undefined;
-  const binding = source && !("kind" in source) ? source : undefined;
-  const claim =
-    binding && params.sessionKey
-      ? binding.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
-  const target = {
-    agentId: binding?.actor.agentId ?? params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: binding?.actor.path ?? params.storePath,
-  };
   let markerTs: number | undefined;
   let validatedFallback: AgentPatchedSessionModelFallback | undefined;
   if (params.sessionKey) {
@@ -177,9 +155,7 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
           ts: markerTs,
         });
       }
-    } catch (error) {
-      rethrowIncognitoSessionError(error);
-      claim?.assertCurrent();
+    } catch {
       params.assertReadCurrent?.();
       markerTs = undefined;
     }
@@ -206,27 +182,20 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
     return attempt ? captureFailure(new Error(attempt.error), attempt.reason) : undefined;
   };
   const reconcile = async (success: boolean) => {
-    if (reconciled || !target.sessionKey || markerTs === undefined) {
+    if (reconciled || !params.sessionKey || markerTs === undefined) {
       return;
     }
     reconciled = true;
     try {
-      const sessionKey = target.sessionKey;
-      const reconcileModel = () =>
-        reconcileAgentPatchedSessionModel({
-          cfg: params.cfg,
-          agentId: target.agentId,
-          sessionKey,
-          storePath: target.storePath,
-          assertCurrent: claim?.assertCurrent,
-          expectedMarkerTs: markerTs,
-          ...(validatedFallback ? { validatedFallback } : {}),
-          outcome: success ? { success: true } : { success: false, ...failure },
-        });
-      claim?.assertCurrent();
-      await (binding
-        ? withIncognitoSessionBinding({ actor: binding.actor }, reconcileModel)
-        : reconcileModel());
+      await reconcileAgentPatchedSessionModel({
+        cfg: params.cfg,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        sessionKey: params.sessionKey,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        expectedMarkerTs: markerTs,
+        ...(validatedFallback ? { validatedFallback } : {}),
+        outcome: success ? { success: true } : { success: false, ...failure },
+      });
     } catch (error) {
       params.onError?.(error);
     }

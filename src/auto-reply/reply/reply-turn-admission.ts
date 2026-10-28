@@ -122,7 +122,6 @@ function rejectLifecycleInvalidatedWork(params: {
   throw new Error(params.message);
 }
 
-/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
@@ -250,6 +249,7 @@ export async function admitReplyTurn(
               isSettling: () =>
                 operation !== undefined &&
                 (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
+              getAbortReason: () => operation?.abortSignal.reason,
               resolveGatewayContext,
               identities: [params.sessionKey],
               storeWriterIdentities:
@@ -360,7 +360,6 @@ export async function admitReplyTurn(
                   });
                 }
                 sessionId = currentEntry?.sessionId ?? sessionId;
-                params.captureRunSelection?.();
               },
             })
           : undefined;
@@ -494,9 +493,6 @@ export async function admitReplyTurn(
             // A predecessor can rotate after the final row read but before this handoff.
             // Reacquire the full admission; its session ID alone grants no authority.
             throw new ReplyOperationChangedDuringAdmissionError();
-          }
-          if (!storePath) {
-            params.captureRunSelection?.();
           }
           if (params.adoptOperation) {
             // The dispatch closures own this object's abort/delivery lifecycle,

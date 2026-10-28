@@ -19,13 +19,10 @@ import {
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
+  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -142,23 +139,12 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
-  abortSignal?.throwIfAborted();
-  const source = captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    source.assertCurrent();
-    return false;
-  }
-  const incognito = captureIncognitoSessionHistoryBinding(target);
-  const capturedTarget = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
-  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
-  const { readSessionTranscriptBoundedMessageTailPageAsync } =
-    await import("../../gateway/session-transcript-readers.js");
-  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
-    capturedTarget,
-    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
-    abortSignal,
-    incognito,
-  );
+  await waitForSessionTranscriptProjection(target, abortSignal);
+  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
+    maxBytes: 5 * 1024 * 1024,
+    maxMessages: 500,
+    offset: 0,
+  });
   return events.some(
     ({ event }) =>
       isRecord(event) &&
@@ -249,7 +235,9 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
         continue;
       }
       const rec = safeParseJsonRecord(line);
-      if (rec?.isSidechain === true) {
+      // Only conversation records count. Claude also logs request echoes
+      // (`api-request-blob`) that repeat answered tool calls under role=assistant.
+      if (rec?.isSidechain === true || (rec?.type !== "user" && rec?.type !== "assistant")) {
         continue;
       }
       const message = asOptionalRecord(rec?.message);
@@ -533,6 +521,9 @@ export function resolveCompletionToolPolicy(params: {
   completionNeedsMessageDelivery: boolean;
 }) {
   const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  if (params.isCliExecutionProvider && run.opts.forceRestartSafeTools === true) {
+    throw new Error("CLI runtimes cannot enforce restart-safe tool restrictions");
+  }
   const completionRetainsRequesterTools =
     params.trustedSubagentAnnounceHandoff &&
     !params.isRawModelRun &&

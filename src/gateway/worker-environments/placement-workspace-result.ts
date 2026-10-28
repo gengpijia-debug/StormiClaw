@@ -81,7 +81,7 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
   );
-  publishPlacementWorkspaceResultState(db, sessionId, null);
+  publishPlacementWorkspaceResultState(db, sessionId);
 }
 
 export function readWorkerWorkspaceReconciliationFacts(
@@ -186,14 +186,10 @@ export function insertWorkerWorkspacePendingResult(
         staged_result_ref: null,
         created_at_ms: nowMs,
       })
-      .onConflict((conflict) => conflict.column("session_id").doNothing())
-      .returningAll(),
+      .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
-  if (result.rows.length === 1) {
-    publishPlacementWorkspaceResultState(db, placement.sessionId, {
-      placement,
-      pendingResult: pendingResultFromRow(result.rows[0]!),
-    });
+  if (result.numAffectedRows === 1n) {
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
     sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
@@ -238,17 +234,11 @@ function markWorkerWorkspacePendingResultAccepted(
       .where("owner_epoch", "=", ownerEpoch)
       .where("placement_generation", "=", claim.placementGeneration)
       .where("claim_id", "=", claim.claimId)
-      .where("run_id", "=", claim.runId)
-      .returningAll(),
+      .where("run_id", "=", claim.runId),
   );
-  if (result.rows.length !== 1) {
+  if (result.numAffectedRows !== 1n) {
     throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
   }
-  publishPlacementWorkspaceResultState(db, placement.sessionId, {
-    placement,
-    pendingResult: pendingResultFromRow(result.rows[0]!),
-  });
-  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
 }
 
 const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
@@ -263,7 +253,9 @@ const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => 
   if (!row || !matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim)) {
     throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
   }
-  return { row, placement };
+  publishPlacementWorkspaceResultState(db, placement.sessionId);
+  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
+  return row;
 };
 
 export function recordStagedWorkerWorkspaceResult(
@@ -281,7 +273,7 @@ export function recordStagedWorkerWorkspaceResult(
   if (repositoryWorkspaceId !== undefined) {
     ensureRepositoryWorkspacePendingResultSchema(db);
   }
-  const { row: pending, placement } = assertPendingClaim(db, claim);
+  const pending = assertPendingClaim(db, claim);
   if (pending.workspace_accepted_at_ms !== null) {
     throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
   }
@@ -293,6 +285,7 @@ export function recordStagedWorkerWorkspaceResult(
     throw new Error(`Worker workspace result ref changed for ${claim.sessionId}`);
   }
   if (repositoryWorkspaceId !== undefined) {
+    const placement = getRequired(db, claim.sessionId);
     const repository = executeSqliteQuerySync(
       db,
       query(db)
@@ -318,17 +311,11 @@ export function recordStagedWorkerWorkspaceResult(
       })
       .where("session_id", "=", claim.sessionId)
       .where("claim_id", "=", claim.claimId)
-      .where("run_id", "=", claim.runId)
-      .returningAll(),
+      .where("run_id", "=", claim.runId),
   );
-  if (result.rows.length !== 1) {
+  if (result.numAffectedRows !== 1n) {
     throw new Error(`Cannot stage stale worker workspace result for ${claim.sessionId}`);
   }
-  publishPlacementWorkspaceResultState(db, placement.sessionId, {
-    placement,
-    pendingResult: pendingResultFromRow(result.rows[0]!),
-  });
-  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
 }
 
 export function listPendingWorkerWorkspaceResultsInDatabase(
@@ -364,7 +351,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
 
     handoffWorkspaceResultRecovery(claim: WorkerSessionTurnClaim): void {
       write((db) => {
-        const { row: pending, placement } = assertPendingClaim(db, claim);
+        const pending = assertPendingClaim(db, claim);
         if (pending.gateway_instance_id !== instanceId) {
           throw new Error(
             `Worker workspace result belongs to another gateway for ${claim.sessionId}`,
@@ -376,17 +363,11 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
             .updateTable("worker_workspace_pending_results")
             .set({ recovery_requested_at_ms: now() })
             .where("session_id", "=", claim.sessionId)
-            .where("gateway_instance_id", "=", instanceId)
-            .returningAll(),
+            .where("gateway_instance_id", "=", instanceId),
         );
-        if (result.rows.length !== 1) {
+        if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${claim.sessionId}`);
         }
-        publishPlacementWorkspaceResultState(db, placement.sessionId, {
-          placement,
-          pendingResult: pendingResultFromRow(result.rows[0]!),
-        });
-        sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
       });
     },
 
@@ -406,7 +387,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
         }
-        publishPlacementWorkspaceResultState(db, pending.sessionId, null);
+        publishPlacementWorkspaceResultState(db, pending.sessionId);
         sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },

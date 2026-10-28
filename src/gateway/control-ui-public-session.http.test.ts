@@ -7,7 +7,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   AUTH_TOKEN,
   createRequest,
@@ -151,16 +150,10 @@ describe("anonymous public session HTTP boundary", () => {
       const html = response.getBody();
       expect(html).toContain("Launch notes");
       expect(html).toContain("The public viewer is ready.");
-      expect(html).not.toMatch(/agent:demo|séssion\.123|new WebSocket|openclaw-app/);
+      expect(html).not.toMatch(/agent:demo|séssion\.123|<script|openclaw-app/);
       expect(responseHeader(response, "Cache-Control")).toBe("no-store");
       expect(responseHeader(response, "Referrer-Policy")).toBe("no-referrer");
-      const csp = responseHeader(response, "Content-Security-Policy");
-      expect(csp).toContain("default-src 'none'");
-      expect(csp).toContain("font-src 'self'");
-      for (const hash of computeInlineScriptHashes(html)) {
-        expect(csp).toContain(hash);
-      }
-      expect(html).toContain(`href="${basePath}/fonts/instrument-sans.css"`);
+      expect(responseHeader(response, "Content-Security-Policy")).toContain("default-src 'none'");
 
       reader.mockClear();
       const head = await send(server, { path: route, method: "HEAD" });

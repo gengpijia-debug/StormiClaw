@@ -14,6 +14,16 @@ for runs already deferred by older workflow revisions.
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
+The `Linux App` Linux companion and Windows installer jobs allow 105 minutes for
+source staging, packaging, and native proof. Their canonical core builds use the existing
+`OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
+cold declarations exceeded the default 45-minute package deadline. A Linux run
+completed its package declarations in 38 minutes before the deadline interrupted
+the following declaration phase; a complete Windows installer job previously took
+78 minutes. The remaining job budget covers dependency installation, Rust
+compilation, desktop tests, and installer packaging. The override stays on each
+source-build step; release-workflow budgets and package-integrity checks are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
@@ -28,15 +38,15 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-First-attempt PR Node matrices let the scoped monitor classify failures before
-cancelling eligible same-repository work. Fork monitoring is read-only. Exact
-known hourly-main test and supported static failures can remain advisory when the PR leaves their
-subjects unchanged and all remaining checks finish. Canonical PR reruns let every
-Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
-run to keep its complete matrix running after a failure. Native matrix fail-fast
-applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
-[failure cancellation](/ci/pipeline#fail-fast-order).
+PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+every failed or timed-out job with the newest completed scheduled main CI run
+and publishes a **pre-existing**, **new**, or **unknown** classification in its
+summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
+matched signatures or job-name-only matches. The existing known-main-red
+allowance and gate result stay unchanged. Detected build-verifier or lint-mode
+scope differences are **unknown**; other reasons say when selected scope was
+not compared. See
+[job ordering and failure reporting](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -89,11 +99,14 @@ Additional checks and narrow-PR guards and dependency scans start directly after
 
 Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Canonical first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
 
-The extension package boundary row has a 30-minute job budget for SDK preparation,
+The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline. Release validation on hosted `ubuntu-24.04` later
+spent about 6 minutes preparing and 23 minutes compiling 128 plugins, passed
+both checks, and was cancelled at the former 30-minute deadline. Other
+additional-check rows retain 20 minutes.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
@@ -125,7 +138,9 @@ Android native resource preparation uses the Mermaid renderer's filtered depende
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
 
-macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
+macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Ordinary native phases retain
+a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to build
+and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 
@@ -293,7 +308,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| [CI pipeline jobs](/ci/pipeline)                               | The job table, the fail-fast order, and the Control UI size budgets.                                                |
+| [CI pipeline jobs](/ci/pipeline)                               | The job table, job ordering and failure reporting, and the Control UI size budgets.                                 |
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
@@ -308,7 +323,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/ci#pipeline-overview` still resolves. Each entry points at the page that now holds the content.
 
 - <a id="pipeline-overview" />[Pipeline overview](/ci/pipeline#pipeline-overview)
-- <a id="fail-fast-order" />[Fail-fast order](/ci/pipeline#fail-fast-order)
+- <a id="fail-fast-order" />[Job ordering and failure reporting](/ci/pipeline#fail-fast-order)
 - <a id="control-ui-size-budgets" />[Control UI size budgets](/ci/pipeline#control-ui-size-budgets)
 - <a id="watching-pull-request-ci" />[Watching pull request CI](/ci/watching-runs#watching-pull-request-ci)
 - <a id="recover-an-existing-pr-run-first" />[Recover an existing PR run first](/ci/watching-runs#recover-an-existing-pr-run-first)

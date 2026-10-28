@@ -1,8 +1,6 @@
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
-import {
-  withSessionEntriesFromStoresInWorker,
-  withSessionEntryReadOnlyInWorker,
-} from "../../../config/sessions/session-entry-read-runtime.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
@@ -144,16 +142,7 @@ async function prepareNativeSessionRuntime(
         });
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
-        return withSessionEntryReadOnlyInWorker(
-          admission,
-          assertCallerCurrent,
-          async (read, owner) => {
-            if (!read.ok) {
-              throw read.error;
-            }
-            return consume(read.value, owner.assertCurrent);
-          },
-        );
+        return consume(loadSessionEntryReadOnly(admission), () => {});
       }
       const reader = getReplyOperationSessionReader(runParams.replyOperation);
       if (reader) {

@@ -257,15 +257,7 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
     ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
     ["started", { sessionStartedAt: now }],
-    [
-      "pinned",
-      {
-        pinnedAt: old,
-        sidebarRoot: true,
-        spawnedBy: key("parent"),
-        parentSessionKey: key("parent"),
-      },
-    ],
+    ["pinned", { pinnedAt: old }],
     ["locked", { modelSelectionLocked: true }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],

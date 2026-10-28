@@ -1446,7 +1446,7 @@ function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
 
 function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
   return invocation.options.has("shell") && invocation.commandArgs.length === 1
-    ? invocation.commandArgs[0]
+    ? (invocation.commandArgs[0] ?? "")
     : join(invocation.commandArgs);
 }
 
@@ -2685,7 +2685,7 @@ function remoteAwsMacosJsBootstrap({
   bun = false,
   sourceBootstrap = "",
 } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.21.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.22.1";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
     'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -2783,7 +2783,7 @@ function remoteAwsMacosJsBootstrap({
 }
 
 function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.21.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.22.1";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_wsl2_js() {",
     'tool_root="${OPENCLAW_CRABBOX_WSL2_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -3656,7 +3656,11 @@ function injectFullCheckoutLeaseReclaim(commandArgs: string[]) {
   return normalizedArgs;
 }
 
-function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
+function injectRemoteTestboxCi(
+  commandArgs: string[],
+  providerName: string,
+  sourceBootstrap: string,
+) {
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
@@ -3666,7 +3670,7 @@ function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
   }
   return replaceRunCommandWithShell(
     invocation,
-    `export CI=true; ${renderRunShellCommand(invocation)}`,
+    `export CI=true; ${sourceBootstrap ? `${sourceBootstrap} || exit $?; ` : ""}exec node scripts/crabbox-remote-redact.mjs -- bash -c ${shellQuote(renderRunShellCommand(invocation))}`,
   );
 }
 
@@ -3720,6 +3724,7 @@ async function applyRunTransforms(
         transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
+        !testboxWorkspace &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
       ) {
         transformedArgs = replaceRunCommandWithShell(
@@ -3749,7 +3754,7 @@ async function applyRunTransforms(
       options.provider,
     );
     return {
-      args: injectRemoteTestboxCi(transformedArgs, options.provider),
+      args: injectRemoteTestboxCi(transformedArgs, options.provider, sourceBootstrap),
       wsl2ScriptBootstrap: {
         ...wsl2ScriptBootstrap,
         cleanup() {

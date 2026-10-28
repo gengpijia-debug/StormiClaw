@@ -498,7 +498,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       typingActors: multiIdentity ? this.typingActorViews() : [],
       typingOverflow: multiIdentity ? this.typingOverflow : undefined,
       onTypingChange: typingEnabled
-        ? (typing, preview, cursor) => this.sendTypingState(typing, preview, cursor)
+        ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
       ...composerAvailability,
       modelSetupRequired:

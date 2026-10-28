@@ -78,6 +78,29 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Session header link helper
+
+`createSessionHeaderLink` from `openclaw/plugin-sdk/control-ui` shipped in
+OpenClaw 2026.10.1 and is deprecated. Session conversation links were retired,
+so hosts no longer pass `props.session` to `session-header` accessories. The
+helper still mounts, but its link never renders. Plugins built against
+2026.10.1 keep loading. Render a custom accessory instead. The
+`plugin-sdk-session-header-link` record allows removal after 2027-01-12.
+
+### Private runtime facade exports
+
+Some `openclaw/plugin-sdk/*` subpaths ship as JavaScript-only runtime facades
+without a `types` export condition. They are not a typed third-party contract,
+but published plugins still import named helpers from them, and a missing name
+fails ESM linking so the whole plugin stops loading. OpenClaw 2026.10.5 betas
+removed some of these names. Exports with published external importers are
+restored and deprecated under the `plugin-sdk-private-runtime-shipped-exports`
+record, which lists each `subpath.name` surface and allows removal after
+2027-01-15. Examples include `readApprovalReactionDeliveryMetadata` from
+`approval-reaction-runtime`, web-search credential setters from
+`provider-web-search`, and `wrapWebContent` from `provider-web-fetch`. Move to
+a typed public subpath that exports the helper, or keep a plugin-local copy.
+
 ### Harness tool construction
 
 Harnesses should await `params.hostCapabilities.createToolSurfaceAsync(options,
@@ -572,7 +595,9 @@ reporting an incomplete inventory as complete.
 
 The recovery inventory collector reports one typed
 `undeclared-migration-resources` warning per plugin without a callback; its
-private state is not included in the recovery set. Malformed declarations and
+additional migration resources cannot be verified. Core-captured database state
+is still covered. Declare an explicit empty list when a migration changes only
+core-captured state or has no data resources. Malformed declarations and
 invalid inventories still fail. Collection does not capture or restore data,
 authorize a migration, or replace an updater's required capture checks.
 

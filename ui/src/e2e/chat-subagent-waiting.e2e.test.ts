@@ -13,7 +13,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("shows child activity without a redundant wait line and restores the parent's working indicator", async () => {
+  it("keeps a yielded parent visibly waiting until its child settles and its next run resumes", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("chat-subagent-waiting", artifactParent)
@@ -317,33 +317,31 @@ suite.define(() => {
             });
           }
         };
-        const childLink = activityRow.getByRole("button");
+        const childLink = indicator.getByRole("button", {
+          name: "Backend implementation",
+          exact: true,
+        });
         await childLink.waitFor();
-        expect(await indicator.count()).toBe(0);
-        // Individual activity stays in the handed-off reply, without another status row.
+        expect((await indicator.textContent())?.replace(/\s+/g, " ")).toContain(
+          "Waiting on Backend implementation",
+        );
+        expect(await indicator.locator("openclaw-elapsed-time").count()).toBe(1);
+        expect(await indicator.textContent()).not.toContain("output tokens");
+        // The wait says who is left itself; the running count never joins it.
+        expect(await indicator.locator(".chat-working-indicator__subagents").count()).toBe(0);
+        // The wait is the handed-off turn's own status: no marker, no second assistant row.
         expect(
           await activePane
             .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
-            .locator(".chat-subagent-activity")
+            .locator(".chat-working-indicator--subagents")
             .count(),
         ).toBe(1);
-        await gateway.emitGatewayEvent("session.observer", {
-          sessionKey: child.key,
-          agentId: "main",
-          sessionId: child.sessionId,
-          runId: "backend-run",
-          revision: 2,
-          updatedAt: now + 63_001,
-          health: "on-track",
-          headline: "Running backend regression tests",
-        });
-        await activityRow.getByText("Running backend regression tests", { exact: true }).waitFor();
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
         await captureWaiting("light", 1280);
         await captureWaiting("dark", 1280);
         await captureWaiting("dark", 390);
         expect(
-          await activityRow.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
         await page.setViewportSize({ width: 1280, height: 900 });
         // Its name shows that subagent in the panel; the conversation stays where it was.
@@ -369,7 +367,6 @@ suite.define(() => {
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
         await activePane.locator(".chat-working-indicator--subagents").waitFor();
-        expect(await indicator.textContent()).toContain("Waiting on subagents");
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -386,8 +383,9 @@ suite.define(() => {
             },
           ]),
         );
-        await activityRow.getByText("Backend implementation refreshed", { exact: true }).waitFor();
-        expect(await indicator.count()).toBe(0);
+        await indicator
+          .getByRole("button", { name: "Backend implementation refreshed", exact: true })
+          .waitFor();
 
         const settledChild: GatewaySessionRow = {
           ...runningChild,
@@ -411,7 +409,7 @@ suite.define(() => {
           session: settledChild,
           ancestorSessions: [settledParent],
         });
-        await activityRow.waitFor({ state: "detached" });
+        await indicator.waitFor({ state: "detached" });
         // A later child start must update the selected parent's held row without a reload.
         const restartedChild: GatewaySessionRow = {
           ...runningChild,
@@ -435,8 +433,7 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        await activityRow.waitFor();
-        expect(await indicator.count()).toBe(0);
+        await activePane.locator(".chat-working-indicator--subagents").waitFor();
         expect(await gateway.getRequests("sessions.list", { spawnedBy: parent.key })).toHaveLength(
           childReads,
         );

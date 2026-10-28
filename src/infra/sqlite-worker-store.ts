@@ -101,7 +101,7 @@ export function reserveSqliteWorkerInputPreparation(
 
 /**
  * Retain an admitted writer through native settlement. Backends request authority
- * after BEGIN and again immediately before COMMIT; the host never joins a native
+ * before BEGIN and again immediately before COMMIT; the host never joins a native
  * writer lock. A successful commit grant linearizes against subsequent revocation.
  */
 export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperations, T>(
@@ -131,7 +131,7 @@ export function createSqliteWorkerWriteAdmission(
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         if (
           !(
-            (phase === "waiting" && request.stage === "transaction") ||
+            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
             (phase === "transaction" && request.stage === "commit")
           )
         ) {
@@ -141,7 +141,9 @@ export function createSqliteWorkerWriteAdmission(
         if (!grant()) {
           throw new Error("SQLite worker write authority expired");
         }
-        phase = phase === "waiting" ? "transaction" : "commit";
+        // A rolled-back attempt can reacquire its initial grant. A successful
+        // commit grant remains terminal for this command's admission owner.
+        phase = request.stage === "transaction" ? "transaction" : "commit";
       }, attachment),
     };
   };

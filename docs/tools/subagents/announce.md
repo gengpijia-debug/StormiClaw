@@ -18,13 +18,19 @@ Sub-agents report back through completion delivery:
 
 By default, delivery depends on requester depth:
 
-- Top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`).
+- Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
+The requester turn's captured origin owns completion routing, including after
+`sessions_yield` and for child pause notices. A WebChat origin does not inherit a
+previous external destination from the session. Without a captured origin, the
+stored delivery route remains the fallback; explicit external routing remains
+supported without clearing that history.
+
 For top-level requester sessions, completion-mode direct delivery first
 resolves any bound conversation/thread route and hook override, then fills
-missing channel-target fields from the requester session's stored route.
+missing channel-target fields from the requester's origin and compatible stored route.
 That keeps completions on the right chat/topic even when the completion
 origin only identifies the channel. When an override selects a different
 chat or topic, it does not inherit the previous route's thread. An explicit
@@ -115,9 +121,17 @@ the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.
 
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. It does not shorten an answer to fit the former announce
-projection limits. The bounded lifecycle snapshot remains separate from the
-complete answer sent to the parent.
+results together. Completion findings have a strict shared 160,000-character cap,
+including escaping and framing. Small answers stay intact; larger answers keep
+their beginning and an explicit truncation marker pointing to `sessions_history`
+with the child session key. `sessions_history` truncates text fields to 4,000
+characters; this pointer does not provide lossless retrieval of an omitted tail.
+Each shown child keeps its task and status, with result heads sharing the remaining
+space above a small floor. If even floor-sized blocks would exceed the cap, the
+remaining children become one bounded summary line with their count, the first few
+session keys, and guidance to inspect them with the session tools. Ordering stays
+deterministic. The bounded lifecycle snapshot and retained complete transcript
+stay separate from these prompt limits.
 
 A successful child with an empty final reply remains in the batch with its task
 identity, `ok` status, and `(no output)` result. Its successful execution status

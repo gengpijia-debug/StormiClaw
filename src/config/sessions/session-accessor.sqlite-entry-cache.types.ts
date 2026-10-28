@@ -55,7 +55,6 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       : {}),
     archivedAt: entry.archivedAt,
     category: entry.category,
-    sidebarRoot: entry.sidebarRoot,
     ...(entry.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),

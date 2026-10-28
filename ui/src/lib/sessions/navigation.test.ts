@@ -19,7 +19,7 @@ function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("resolveSessionNavigation", () => {
-  it("keeps persistent spawned conversations discoverable without selecting or loading their parent", () => {
+  it("keeps a categorized spawned conversation discoverable without selecting or loading its parent", () => {
     const parentKey = "agent:main:discord:channel:parent";
     const office = {
       key: "agent:main:dashboard:office-ha",
@@ -47,11 +47,7 @@ describe("resolveSessionNavigation", () => {
       resultAgentId: "main",
       sessionKey: wake.key,
     });
-    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
-      office.key,
-      "agent:main:dashboard:uncategorized",
-      wake.key,
-    ]);
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([office.key, wake.key]);
   });
 
   it("hides cron sessions unless showCron opts in", () => {

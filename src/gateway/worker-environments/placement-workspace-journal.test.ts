@@ -243,9 +243,6 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
     }
     if (scenario.outcome === "unknown") {
-      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-        () => {},
-      );
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) => {

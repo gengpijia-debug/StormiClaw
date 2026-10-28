@@ -78,7 +78,6 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
               stagePlacementWorkspaceJournalWorkerPublication(
                 context.admission.identity,
                 owner.sessionId,
-                command.type === "placementJournals.begin",
               ),
             );
           }

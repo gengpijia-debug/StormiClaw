@@ -77,11 +77,65 @@ describe("mattermost reactions", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed for an unspecified origin without a canonical target", async () => {
+  it("binds delegated reaction removal to the authorized channel", async () => {
+    const fetchMock = createMattermostReactionFetchMock({
+      mode: "remove",
+      postId: "POST1",
+      postChannelId: "CHANNEL1",
+      emojiName: "thumbsup",
+    });
+
+    const result = await removeMattermostReaction({
+      cfg: createMattermostTestConfig(cacheKey),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      authorizedTarget: "group:CHANNEL1",
+      conversationReadOrigin: "delegated",
+      fetchImpl: fetchMock,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        requestUrl(call[0]).endsWith("/api/v4/users/BOT123/posts/POST1/reactions/thumbsup"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([undefined, "delegated" as const])(
+    "fails closed for %s origin without a canonical target",
+    async (conversationReadOrigin) => {
+      const fetchMock = createMattermostReactionFetchMock({
+        mode: "add",
+        postId: "POST1",
+        postChannelId: "CHANNEL1",
+        emojiName: "thumbsup",
+      });
+
+      const result = await addMattermostReaction({
+        cfg: createMattermostTestConfig(cacheKey),
+        postId: "POST1",
+        emojiName: "thumbsup",
+        conversationReadOrigin,
+        fetchImpl: fetchMock,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: expect.stringContaining("require a canonical authorized conversation target"),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("binds delegated direct-message reactions to the bot and selected peer", async () => {
     const fetchMock = createMattermostReactionFetchMock({
       mode: "add",
       postId: "POST1",
-      postChannelId: "CHANNEL1",
+      postChannelId: "DMCHANNEL",
+      channelType: "D",
+      channelName: "BOT123__PEER123",
+      userId: "BOT123",
       emojiName: "thumbsup",
     });
 
@@ -89,14 +143,12 @@ describe("mattermost reactions", () => {
       cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
+      authorizedTarget: "user:PEER123",
+      conversationReadOrigin: "delegated",
       fetchImpl: fetchMock,
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.stringContaining("require a canonical authorized conversation target"),
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true });
   });
 
   it("rejects delegated direct-message posts owned by another peer", async () => {

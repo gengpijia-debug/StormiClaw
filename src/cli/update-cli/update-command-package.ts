@@ -156,7 +156,10 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       : undefined;
   } catch (error) {
     assertCurrent();
-    return await deferPackageStateVerification({ ...params, assertCurrent }, error);
+    return await deferPackageStateVerification(
+      { ...params, assertCurrent, migrationRecorded: Boolean(context?.databaseBackup?.migration) },
+      error,
+    );
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
@@ -618,7 +621,6 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
   resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
-  const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   let installTarget = params.installTarget;
   if (!installTarget) {
     const manager = await resolveGlobalManager({
@@ -634,6 +636,7 @@ export async function runPackageInstallUpdate(
       honorPackageRoot: params.honorPackageRoot === true,
     });
   }
+  const installEnv = params.installEnv ?? (await createGlobalInstallEnv(undefined, installTarget));
   const pkgRoot = installTarget.packageRoot;
   const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
   const installSpec =

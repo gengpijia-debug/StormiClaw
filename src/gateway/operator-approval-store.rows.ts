@@ -15,7 +15,6 @@ import {
 } from "../infra/kysely-sync.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
-import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDatabase,
@@ -419,16 +418,14 @@ export function denyCorruptPendingRow(params: {
 }): void {
   const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  const changed = executeSqliteQuerySync(
+  executeSqliteQuerySync(
     params.database.db,
     stateDb
       .updateTable("operator_approvals")
       .set(operatorApprovalTerminalFields("denied", "storage-corrupt", auditTimestampMs))
       .where("approval_id", "=", params.id)
-      .where("status", "=", "pending")
-      .returningAll(),
+      .where("status", "=", "pending"),
   );
-  operatorApprovalPublication.stagePostimages(params.database.db, changed.rows);
 }
 
 export function expirePendingRow(params: {
@@ -439,17 +436,15 @@ export function expirePendingRow(params: {
 }): OperatorApprovalRow | undefined {
   const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  const changed = executeSqliteQuerySync(
+  executeSqliteQuerySync(
     params.database.db,
     stateDb
       .updateTable("operator_approvals")
       .set(operatorApprovalTerminalFields("expired", "timeout", auditTimestampMs))
       .where("approval_id", "=", params.id)
       .where("status", "=", "pending")
-      .where("expires_at_ms", "<=", params.nowMs)
-      .returningAll(),
+      .where("expires_at_ms", "<=", params.nowMs),
   );
-  operatorApprovalPublication.stagePostimages(params.database.db, changed.rows);
   return selectOperatorApprovalRow(params.database, params.id);
 }
 

@@ -47,7 +47,6 @@ async function callTyping(params: {
   sessionId: string;
   typing: boolean;
   preview?: string;
-  cursor?: number;
   agentId?: string;
   client: GatewayClient;
   context: GatewayRequestContext;
@@ -61,7 +60,6 @@ async function callTyping(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     typing: params.typing,
     ...(params.preview !== undefined ? { preview: params.preview } : {}),
-    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
   await sessionSuggestionHandlers["session.typing"]?.({
     req: { type: "req", id: "typing-request", method: "session.typing", params: requestParams },
@@ -167,43 +165,27 @@ describe("session typing handler", () => {
         context: context(broadcast),
       };
 
-      expect(
-        await callTyping({ ...params, typing: true, preview: "  first draft  ", cursor: 4 }),
-      ).toEqual({
+      expect(await callTyping({ ...params, typing: true, preview: "  first draft  " })).toEqual({
         ok: true,
         broadcast: true,
       });
-      expect(broadcast.mock.calls[0]?.[1]).toMatchObject({
-        typing: true,
-        preview: "  first draft  ",
-        cursor: 4,
-      });
+      expect(broadcast.mock.calls[0]?.[1]).toMatchObject({ typing: true, preview: "first draft" });
 
       const oversizedPreview = "😀".repeat(405);
       await vi.advanceTimersByTimeAsync(250);
-      expect(
-        await callTyping({ ...params, typing: true, preview: oversizedPreview, cursor: 800 }),
-      ).toEqual({
+      expect(await callTyping({ ...params, typing: true, preview: oversizedPreview })).toEqual({
         ok: true,
         broadcast: true,
       });
-      expect(broadcast.mock.calls[1]?.[1]).toMatchObject({
-        preview: "😀".repeat(400),
-        cursor: 800,
-      });
-
-      await callTyping({ ...params, typing: true, preview: oversizedPreview, cursor: 2 });
-      await vi.advanceTimersByTimeAsync(250);
-      expect(broadcast.mock.lastCall?.[1]).toMatchObject({ preview: "😀".repeat(400), cursor: 2 });
+      expect(broadcast.mock.calls[1]?.[1].preview).toBe("😀".repeat(400));
 
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await callTyping({ ...params, typing: false, preview: "must not leak" })).toEqual({
         ok: true,
         broadcast: true,
       });
-      expect(broadcast.mock.lastCall?.[1]).toMatchObject({ typing: false });
-      expect(broadcast.mock.lastCall?.[1]).not.toHaveProperty("preview");
-      expect(broadcast.mock.lastCall?.[1]).not.toHaveProperty("cursor");
+      expect(broadcast.mock.calls[2]?.[1]).toMatchObject({ typing: false });
+      expect(broadcast.mock.calls[2]?.[1]).not.toHaveProperty("preview");
     });
   });
 

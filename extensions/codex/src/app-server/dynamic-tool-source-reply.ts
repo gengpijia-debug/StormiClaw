@@ -12,6 +12,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
+type ToolAuthoredSourceReplyPayload = NonNullable<
+  ReturnType<typeof captureToolAuthoredSourceReply>
+>;
+
 export type CodexToolResultSourceReply = {
   /** The message tool itself marked its current-source reply terminal. */
   toolConfirmed: boolean;
@@ -25,10 +29,9 @@ export type CodexToolResultSourceReply = {
  * Resolves the source-reply facts of one Codex dynamic tool result and records whether
  * it ends the Codex turn on `response`. A final reply
  * authored by a `canDeliverSourceReply` tool, read from the result after middleware and
- * extensions, stays on the response until batch settlement. The host delivers it
- * and writes its transcript row after the send. Only calls in the model-only
- * namespace qualify: Codex never exposes that namespace to Code Mode programs,
- * so a program's intermediate call
+ * extensions, is appended to `payloads`; the host delivers it and writes its transcript
+ * row after the send. Only calls in the model-only namespace qualify: Codex never
+ * exposes that namespace to Code Mode programs, so a program's intermediate call
  * cannot end the turn or reach the conversation.
  */
 export function resolveCodexToolResultSourceReply(params: {
@@ -42,6 +45,7 @@ export function resolveCodexToolResultSourceReply(params: {
   deliveredSourceReply: boolean;
   executedArgs: Record<string, unknown>;
   runId: string | undefined;
+  payloads: ToolAuthoredSourceReplyPayload[];
   response: CodexDynamicToolRuntimeResponse;
 }): CodexToolResultSourceReply {
   const messageToolOnly =
@@ -64,6 +68,9 @@ export function resolveCodexToolResultSourceReply(params: {
           idempotencyScope: params.runId ?? params.call.turnId,
         })
       : undefined;
+  if (payload) {
+    params.payloads.push(payload);
+  }
   const toolAuthoredFinal = Boolean(payload);
   const continuesSourceReplyProgress = confirmed && final === false;
   const terminate =
@@ -81,11 +88,8 @@ export function resolveCodexToolResultSourceReply(params: {
     (confirmed && final === true) ||
     undefined;
   params.response.terminate = terminate;
-  if (payload) {
-    params.response.toolAuthoredSourceReply = {
-      ...payload,
-      toolAuthoredForTurnId: params.call.turnId,
-    };
+  if (toolAuthoredFinal) {
+    params.response.toolAuthoredFinalReply = true;
   }
   return { toolConfirmed, final, terminate };
 }

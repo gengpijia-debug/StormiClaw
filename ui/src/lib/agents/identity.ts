@@ -1,4 +1,3 @@
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -14,7 +13,7 @@ type AgentIdentityGatewaySnapshot = Pick<
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
   subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
+  subscribeEvents?: (listener: (event: { event: string }) => void) => () => void;
 };
 
 type AgentIdentityCacheEntry = {
@@ -132,27 +131,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
 
   gateway.subscribe(resetForGateway);
 
-  const invalidate = (agentIds: readonly (string | null | undefined)[]) => {
-    const ids = normalizeUniqueTrimmedStringList(agentIds);
-    invalidateAgentIdentityCache(cachedClient, ids);
-    for (const agentId of ids) {
-      invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
-      identities.delete(agentId);
-    }
-    // Chat can hold a shared request without a capability snapshot.
-    if (ids.length > 0) {
-      publish();
-    }
-  };
-
   gateway.subscribeEvents?.((event) => {
-    if (event.event === "agent.identity.changed") {
-      const agentId = asNonArrayRecord(event.payload).agentId;
-      if (typeof agentId === "string") {
-        invalidate([agentId]);
-      }
-      return;
-    }
     if (event.event !== "config.changed") {
       return;
     }
@@ -220,7 +199,20 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         publish();
       }
     },
-    invalidate,
+    invalidate(agentIds: readonly (string | null | undefined)[]) {
+      let changed = false;
+      const ids = normalizeUniqueTrimmedStringList(agentIds);
+      invalidateAgentIdentityCache(cachedClient, ids);
+      for (const agentId of ids) {
+        invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
+        if (identities.delete(agentId)) {
+          changed = true;
+        }
+      }
+      if (changed) {
+        publish();
+      }
+    },
     subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
 }

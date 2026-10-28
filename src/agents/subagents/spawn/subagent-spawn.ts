@@ -11,7 +11,6 @@ import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
-import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   runSpawnPipeline,
   summarizeSpawnError,
@@ -68,11 +67,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  let assertDelegationCurrent: (() => void) | undefined;
-  const assertActive = () => {
-    ctx.assertActive?.();
-    assertDelegationCurrent?.();
-  };
+  const assertActive = ctx.assertActive;
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
@@ -125,16 +120,7 @@ export async function spawnSubagentDirect(
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
-    const delegation = prepareNativeDelegatedToolPolicy({
-      config: cfg,
-      requesterAgentId,
-      targetAgentId,
-      requesterSessionKey: requesterInternalKey,
-      context: ctx,
-    });
-    const delegatedToolPolicy = delegation.policy;
-    assertDelegationCurrent = delegation.assertCurrent;
-    assertActive();
+    assertActive?.();
     if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
@@ -147,7 +133,7 @@ export async function spawnSubagentDirect(
     }
     const childPlan = await resolveSubagentChildPlan({
       request: params,
-      ctx: { ...ctx, assertActive },
+      ctx,
       cfg,
       requesterInternalKey,
       requesterAgentId,
@@ -201,7 +187,6 @@ export async function spawnSubagentDirect(
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
       inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-      delegatedToolPolicy,
       modelPatch: plan.initialSessionPatch,
       swarmGroupId,
       collect: params.collect === true,

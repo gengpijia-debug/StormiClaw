@@ -1,7 +1,6 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
-import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -20,7 +19,10 @@ import {
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
+import {
+  recordUpdateRunMutationInWorker,
+  withUpdateRunWriteAdmission,
+} from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -85,21 +87,19 @@ export function executeSharedStateCommand(
     return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
-    return recordUpdateRunMutationInWorker(
-      command,
-      stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+    const writer = updateRunWriter();
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      recordUpdateRunMutationInWorker(command, stateOptions(), assertCurrent, writer),
     );
   }
   if (command.type === "updateRuns.reconcile") {
-    return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      persistInterruptedUpdateObservation(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "claws.install-schema-versions") {
@@ -178,17 +178,13 @@ export function executeSharedStateCommand(
     return importSandboxRegistryRow(command.input, writeOptions);
   }
   if (command.type === "workspace.replaceAttestation") {
-    return runOpenClawStateWriteTransaction(
-      (writer) =>
-        captureWorkspaceStateReceipt(writer.db, () => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
-          return result;
-        }),
-      writeOptions,
-    );
+    return runOpenClawStateWriteTransaction((writer) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
+      return result;
+    }, writeOptions);
   }
   if (
     command.type === "workspace.snapshotAndRegister" ||

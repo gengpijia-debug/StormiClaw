@@ -757,7 +757,15 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         case .ready:
             gatewayUpdateIncomplete ? .repair : .none
         case let .incompatible(_, found, required):
-            CLIInstallPrompter.isManagedUpgrade(found: found, required: required) ? .update : .none
+            if CLIInstallPrompter.isManagedUpgrade(found: found, required: required) {
+                .update
+            } else if gatewayUpdateIncomplete,
+                      CLIInstaller.satisfiesUpdateTarget(installedVersion: found, targetVersion: required)
+            {
+                .repair
+            } else {
+                .none
+            }
         case .missing, .unusable:
             .install
         }
@@ -1096,6 +1104,7 @@ extension PostUpdateController {
         generation: UInt64) async -> PostUpdateRuntimeVerification
     {
         guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return .failed }
+        let dispatchedReceipt = self.receipt ?? receipt
         self.model.phase = .updating
         self.model.message = String(localized: "Preparing the bundled Gateway runtime…")
         self.show()
@@ -1103,7 +1112,11 @@ extension PostUpdateController {
             let activation = try await GatewayProcessManager.shared.prepareBundledRuntimeAfterUpdate(
                 source: self.activationSource(source, generation: generation))
             switch activation {
-            case .ready: return .verified
+            case .ready:
+                // Bundled preparation joins Doctor and activation before settling this version's core checkpoint.
+                self.receipt = PostAppUpdateReceiptStore.completeCoreRepair(
+                    currentVersion: dispatchedReceipt.toVersion, owner: .gateway) ?? self.receipt
+                return .verified
             case .deferred: return .deferred
             case let .failed(reason):
                 self.fail(
@@ -1141,7 +1154,9 @@ extension PostUpdateController {
     {
         switch outcome {
         case let .success(_, installedVersion):
-            guard installedVersion == targetVersion else {
+            guard CLIInstaller.satisfiesUpdateTarget(
+                installedVersion: installedVersion, targetVersion: targetVersion)
+            else {
                 self.fail(
                     message: String(localized: "Gateway verification failed."),
                     details: String(localized: "The managed runtime does not match the updated Mac app."))
@@ -1225,7 +1240,20 @@ extension PostUpdateController {
             self.show()
             self.fail(
                 message: String(localized: "Gateway verification failed."),
-                details: String(localized: "The managed runtime does not match the updated Mac app."))
+                details: GatewayProcessManager.shared.lastFailureReason?.nonEmpty ??
+                    (resolution.installedCLI == nil
+                        ?
+                        String(
+                            localized: """
+                            The installed Gateway service command could not be inspected.
+                            Repair this Mac app's managed installation, then retry recovery.
+                            """)
+                        :
+                        String(
+                            localized: """
+                            The managed Gateway CLI is unavailable.
+                            Repair the installation selected by this Mac app, then retry recovery.
+                            """)))
             return false
         case .none:
             if !resolution.prepareLocalCompanion, !verifiedCompanion {
@@ -1333,9 +1361,11 @@ extension PostUpdateController {
             }
         }
         let runtimeStatus = await CLIInstaller.managedStatus(
-            expectedVersion: receipt.toVersion, installedCLI: verifiedCLI, usesBundledRuntime: false)
+            expectedVersion: nil, installedCLI: verifiedCLI, usesBundledRuntime: false)
         guard AppStateStore.shared.connectionMode == connectionMode else { return .deferred }
-        guard case .ready = runtimeStatus else {
+        guard case let .ready(_, installedVersion) = runtimeStatus,
+              CLIInstaller.satisfiesUpdateTarget(installedVersion: installedVersion, targetVersion: receipt.toVersion)
+        else {
             self.fail(
                 message: String(localized: "Gateway verification failed."),
                 details: String(localized: "The managed runtime does not match the updated Mac app."))

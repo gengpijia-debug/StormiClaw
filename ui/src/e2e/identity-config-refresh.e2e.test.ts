@@ -36,7 +36,7 @@ const roster = (name: string, avatar: string): AgentsListResult => ({
 });
 
 suite.define(() => {
-  it.each(["config.changed", "agent.identity.changed"])("%s refreshes chat", async (event) => {
+  it("refreshes the visible chat identity after a successful config change", async () => {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
       locale: "en-US",
@@ -94,16 +94,10 @@ suite.define(() => {
           }
           return rows;
         },
-        {
-          nextIdentity: identity(nextName, nextAvatar),
-          nextRoster: roster(nextName, nextAvatar),
-        },
+        { nextIdentity: identity(nextName, nextAvatar), nextRoster: roster(nextName, nextAvatar) },
       );
       try {
-        await gateway.emitGatewayEvent(
-          event,
-          event === "config.changed" ? { hash: "synthetic-identity-change" } : { agentId: "main" },
-        );
+        await gateway.emitGatewayEvent("config.changed", { hash: "synthetic-identity-change" });
         await expect
           .poll(() =>
             successfulResponses.evaluate(
@@ -117,9 +111,7 @@ suite.define(() => {
               (rows) => rows.filter((row) => row.method === "agent.identity.get").length,
             ),
           )
-          .toBeGreaterThanOrEqual(1);
-        await expect.poll(() => heading.textContent()).toBe(nextName);
-        await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(nextAvatar);
+          .toBeGreaterThanOrEqual(2);
         await expect.poll(() => page.title()).toContain(nextName);
         const observed = {
           name: (await heading.textContent())?.trim(),
@@ -127,6 +119,8 @@ suite.define(() => {
           avatarLabel: await avatar.getAttribute("aria-label"),
           placeholder: await composer.getAttribute("placeholder"),
         };
+        expect([initialName, nextName]).toContain(observed.name);
+        expect([initialAvatar, nextAvatar]).toContain(observed.avatar);
         expect(await composer.inputValue()).toBe(draft);
         expect(page.url()).toBe(sessionUrl);
         expect(await page.locator(".chat-group").count()).toBe(0);

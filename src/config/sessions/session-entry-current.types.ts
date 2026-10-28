@@ -17,7 +17,6 @@ export type SessionEntryCurrentFacts = {
   inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
-  delegatedToolPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;

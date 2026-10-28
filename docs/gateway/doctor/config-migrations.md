@@ -70,6 +70,9 @@ format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
+Doctor checks retired runtime files and referenced OAuth sidecars before entering
+repair maintenance or preparing database migrations. A refusal leaves the database
+schemas and running Gateway unchanged, so the intermediate upgrade remains usable.
 
 Except for the deferred readers recorded below, legacy normalization belongs to
 Doctor and migration owners, with the existing backup and verification flow.
@@ -244,7 +247,7 @@ Doctor also refuses these retired config inputs:
 - Agent `model.timeoutMs` and `subagents.model.timeoutMs`, including defaults.
   Timeouts on tool-model selectors remain supported.
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
-- `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
+- Nonempty or malformed `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
 - Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
   discover their relay endpoint automatically; the extension driver remains supported.
@@ -275,6 +278,11 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+An empty `plugins.installs: {}` contains no install records. `openclaw doctor --fix`
+backs up the config and removes this retired key, preserving the SQLite plugin
+index and any settings retained for pending plugin migrations. Runtime config
+validation still rejects the key until Doctor repairs it.
 
 WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
 the reported channel or account path before retrying; removing this no-op does
@@ -502,7 +510,10 @@ Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
 updates will not recreate it. Account pins cover only accounts present during
 migration. For trusted official plugins with older Doctor contracts, Doctor uses
 historical listener facts shipped with the Gateway. The installed plugin retains
-ownership of its other config migrations. Other plugins can remain pending while
+ownership of its other config migrations. During an update, these listener repairs
+also run when an installed official plugin is deferred until package convergence;
+its deferred code is not loaded, and replacement plugins retain their ownership.
+Other plugins can remain pending while
 other channels finish. Replacing a pending plugin runs the same migration through
 the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
@@ -743,6 +754,22 @@ for the publication contract and the remaining risk for an old CLI stalled
 beyond the grace period.
 
 ## Native Codex recovery after Tasks removal
+
+The Codex plugin's `codex-native-assignment-repair` runs during
+`openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
+proven duplicate assignments for the same child and native turn and removes
+assignments whose requester session, lifecycle, or connection is provably
+obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+conflicting facts produce a recoverable warning without changing the row.
+Separate pending turns of one child are preserved. Repairs use the
+existing SQLite backup and exact-row compare-and-apply owner; no database schema
+or assignment format changes. Ordinary Gateway startup does not run this repair.
+
+Unknown or malformed ownership and bindings changed during repair are preserved
+with recoverable warnings, allowing updates to finish best effort. Retry
+`openclaw doctor --fix` after resolving those warnings. Historical retry exhaustion
+without durable evidence stays unresolved: neither the age of an assignment nor
+a child's completed execution proves its result was delivered or abandoned.
 
 The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
 recoverable native child work when upgrading from the Tasks runtime. It runs

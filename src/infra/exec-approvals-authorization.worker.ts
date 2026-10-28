@@ -13,7 +13,6 @@ import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { execPolicyMutationOperations } from "./exec-approvals-mutation.worker.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
-import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import { execApprovalRetirementOperations } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
@@ -23,10 +22,7 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "./sqlite-worker-operation-admission.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
   db: DatabaseSync,
@@ -84,33 +80,17 @@ export function commitExecAuthorizationsInWorker(
   return context.write(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const captured = execApprovalsPublication.capture(db, () => {
-        const current = snapshotFromExecApprovalsDatabase(db, displayPath);
-        const committed = applyAuthorizationBatch(db, current, input.items);
-        if (committed.snapshot.raw !== current.raw) {
-          writeExecApprovalsConfigRow({
-            db,
-            file: committed.snapshot.file,
-            raw: committed.snapshot.raw ?? undefined,
-            change: input.items.some(
-              (item, index) =>
-                committed.outcomes[index]?.ok &&
-                item.allowAlwaysDecision &&
-                item.allowAlwaysDecision.kind !== "one-shot",
-            )
-              ? "policy"
-              : "usage",
-          });
-        }
-        return committed;
-      });
+      const current = snapshotFromExecApprovalsDatabase(db, displayPath);
+      const committed = applyAuthorizationBatch(db, current, input.items);
+      if (committed.snapshot.raw !== current.raw) {
+        writeExecApprovalsConfigRow({
+          db,
+          file: committed.snapshot.file,
+          raw: committed.snapshot.raw ?? undefined,
+        });
+      }
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      deferSqliteWorkerCommitReceipt(
-        db,
-        { execFacts: execApprovalsPublication.bound(captured.receipt) },
-        captured.receipt.facts.size ? "commit" : "settlement",
-      );
-      return captured.result.outcomes;
+      return committed.outcomes;
     },
     { operationLabel: "exec-approvals.commit-authorizations" },
   );

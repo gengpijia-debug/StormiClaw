@@ -249,6 +249,7 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
+        guard !self.hostingChangeInProgress else { return false }
         guard self.gatewayHosting == .service else { return false }
         guard !CommandResolver.connectionModeIsRemote() || self.hostsLocalGatewayWithRemotePrimary else { return false }
         guard self.desiredActive else { return false }
@@ -432,6 +433,7 @@ final class GatewayProcessManager {
         // status read cannot look reusable, so the ownership guard preserves it instead of forcing
         // an install; a reusable PID from this same snapshot receives its readiness cycle below.
         let listener = await PortGuardian.shared.describe(port: request.port)
+        guard !self.hostingChangeInProgress else { return .skipped }
         // Stop waits for the admitted install before disabling; it only discards queued requests.
         guard request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
         else { return .skipped }
@@ -1395,6 +1397,8 @@ extension GatewayProcessManager {
         where C.Duration == Duration
     {
         let connection = await self.connection
+        // Startup readiness owns retry cadence and deadline; boot-time refusals must not delay a ready Gateway.
+        await connection.clearConnectFailureBackoff()
         // Startup owns recovery and its monotonic deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
         // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.

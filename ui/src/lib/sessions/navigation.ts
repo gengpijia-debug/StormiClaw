@@ -192,7 +192,12 @@ export function filterVisibleSessionRows(
     ) {
       return true;
     }
-    return sessionMatchesVisibleSessionScope(row, options) && !isSubagentSessionKey(row.key);
+    return (
+      sessionMatchesVisibleSessionScope(row, options) &&
+      !isSubagentSessionKey(row.key) &&
+      // Explicit groups keep persistent spawned conversations in shared navigation.
+      (!row.spawnedBy || normalizeOptionalString(row.category) != null)
+    );
   });
 }
 

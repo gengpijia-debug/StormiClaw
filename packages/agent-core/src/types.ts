@@ -309,7 +309,6 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   completesToolTurn?: (context: {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
-    terminalToolCallIds: ReadonlySet<string>;
   }) => boolean;
 
   /** @internal Preserves loop safety evidence across Agent.continue() retries. */

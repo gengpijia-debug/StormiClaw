@@ -431,7 +431,6 @@ export async function prepareGatewayLifecycle(params: {
       step("auth-profile-usage", () => closeAuthProfileUsage(params.sdkResourceHost)),
       step("model-accounts", stopModelAccountsForClose),
       step("mention-inbox", () => mentionInbox.dispose()),
-      step("worktree-run-end", () => worktreeRunEnd.drain()),
       step("sandbox-registry", () => sandboxRegistry.drain()),
       step("talk-persistence", () => talkClose.drain()),
     ]);
@@ -453,13 +452,15 @@ export async function prepareGatewayLifecycle(params: {
       step("health-work", () => healthWork.drain()),
     ]);
   };
+  // Set synchronously by prepareClose, before the close plan reaches the prelude.
+  let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
     stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      skillsChangeUnsub: runtimeState.skillsChangeUnsub,
+      skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
       disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
       stopChannelHealthMonitor: async () => {
         const monitor = runtimeState?.channelHealthMonitor;
@@ -505,6 +506,7 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
+    exitAfterClose = optsValue?.exitAfterClose === true;
     // Recovery and reply cancellation must precede services that join those replies.
     await markClosePreludeStarted(optsValue);
     const preparation = await shutdownRuntime.prepareGatewayClose(
@@ -536,6 +538,7 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         getPendingReplyCount: getTotalPendingReplies,
+        disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
         updateCheckStop: runtimeState.stopGatewayUpdateCheck,
         configReloader: { stop: stopConfigReloaderForClose },
       },
@@ -600,10 +603,10 @@ export async function prepareGatewayLifecycle(params: {
                 : {}),
               drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
               disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
+              drainWorktreeRunEnd: () => worktreeRunEnd.drain(),
               drainRetainedOpenAiEmbeddingProviders:
                 shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
               stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
-              disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
               closeProviderTransportDispatcherPool:
                 shutdownRuntime.closeProviderTransportDispatcherPool,
             },

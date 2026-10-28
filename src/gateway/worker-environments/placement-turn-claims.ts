@@ -30,7 +30,6 @@ import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
-  publishPlacementWorkspaceJournalState,
 } from "./placement-turn-authority.js";
 import {
   deferTurnClaimRelease,
@@ -510,12 +509,9 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           if (marked.numAffectedRows !== 1n) {
             throw new Error(`Worker workspace journal changed for session ${sessionId}`);
           }
-          publishPlacementWorkspaceJournalState(db, sessionId, true);
         }
-        const updated = getRequired(db, sessionId);
-        publishPlacementTurnClaimState(db, updated, current.state);
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        return updated;
+        return getRequired(db, sessionId);
       });
     },
   };

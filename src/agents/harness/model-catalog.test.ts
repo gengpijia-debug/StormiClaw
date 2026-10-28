@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { mergePreparedNativeCatalog } from "../prepared-model-runtime.full-catalog.js";
+import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
   augmentModelCatalogWithAgentHarness,
   augmentPreparedModelCatalogWithAgentHarness,
@@ -101,6 +101,7 @@ describe("agent harness model catalog", () => {
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
     { baseRuntime: "openclaw", agentRuntime: "native-one", observedRuntime: "native-one" },
     { baseRuntime: "native-one", agentRuntime: "openclaw", observedRuntime: undefined },
+    { baseRuntime: "native-one", agentRuntime: "native-two", observedRuntime: "native-two" },
   ])(
     "observes only the selected runtime with configured=$baseRuntime selected=$agentRuntime",
     async ({ baseRuntime, agentRuntime, observedRuntime }) => {
@@ -499,5 +500,65 @@ describe("agent harness model catalog", () => {
         { provider: "openai", model: "gpt-5.6-sol" },
       ],
     });
+  });
+
+  it("prepares configured refs for the selected agent without including other agents", async () => {
+    const selectedConfig: OpenClawConfig = {
+      agents: {
+        defaults: cfg.agents?.defaults,
+        entries: {
+          main: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              "openai/synthetic-configured": {},
+            },
+          },
+          another: { model: { primary: "openai/synthetic-other-agent" } },
+        },
+      },
+    };
+    const loadModelCatalog = vi.fn(async () => []);
+    await augmentModelCatalogWithAgentHarness({
+      cfg: selectedConfig,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/workspace",
+      defaultProvider: "anthropic",
+      defaultModel: "openai/gpt-5.6-sol",
+      snapshot,
+      pluginRegistry: registryWithCatalog(loadModelCatalog),
+    });
+
+    expect(loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: selectedConfig,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/workspace",
+      configuredModelRefs: [
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "synthetic-configured" },
+      ],
+    });
+  });
+
+  it("keeps prepared rows when harness discovery fails", async () => {
+    const onError = vi.fn();
+    const result = await augmentModelCatalogWithAgentHarness({
+      cfg,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/workspace",
+      defaultProvider: "anthropic",
+      defaultModel: "openai/gpt-5.6-sol",
+      snapshot,
+      pluginRegistry: registryWithCatalog(async () => {
+        throw new Error("model/list unavailable");
+      }),
+      onError,
+    });
+
+    expect(result).toBe(snapshot);
+    expect(onError).toHaveBeenCalledOnce();
   });
 });

@@ -28,7 +28,6 @@ function decodeSessionEntryCurrentFacts(
       inheritedToolPolicySource: value.inheritedToolPolicySource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
-      delegatedToolPolicy: value.delegatedToolPolicy,
     };
   }
   const recovery = value.subagentRecovery;

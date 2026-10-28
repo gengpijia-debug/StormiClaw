@@ -85,7 +85,6 @@ const ownedChildMetadata = {
   space: "hq",
   spawnedBy: "agent:main:main",
   completionOwnerSessionKey: "agent:main:discord:direct:alice",
-  sidebarRoot: true,
   inheritedToolPolicyVersion: 1,
   inheritedToolAllow: ["read", "message"],
   inheritedToolDeny: ["exec"],

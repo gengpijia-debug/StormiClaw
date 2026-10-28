@@ -49,6 +49,7 @@ import {
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
+  detachPartialSnapshot,
 } from "./openai-transport-shared.js";
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
@@ -111,9 +112,9 @@ export async function processCompletionsStream(
   const openAIModel = model as OpenAIModeModel;
   const compat = getCompat(openAIModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
-  const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
-  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const deepSeekTextFilter = compat.emitsDsmlToolCalls ? createDeepSeekTextFilter() : null;
+  const deepSeekToolCallRecoverer =
+    !directMode && compat.emitsDsmlToolCalls ? createDsmlRecoverer() : null;
   const gemmaToolCallRecoverer =
     !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
@@ -133,7 +134,8 @@ export async function processCompletionsStream(
   const encryptedReasoning = createOpenAIEncryptedToolCallReasoningTracker();
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
-  const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
+  const provisionalCommentaryTags =
+    directMode && options.provisionalCommentaryTags ? options.provisionalCommentaryTags : new Map();
   const blockIndices = new WeakMap<TextBlock | ThinkingBlock | ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
@@ -146,7 +148,7 @@ export async function processCompletionsStream(
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
-    stream.push(event);
+    stream.push(detachPartialSnapshot(event));
   };
   const appendToolCallBlock = (block: ToolCallBlock) => {
     output.content.push(block);
@@ -270,6 +272,7 @@ export async function processCompletionsStream(
       );
     }
   };
+  const recoveredToolCallBlocks = new Set<ToolCall>();
   const appendRecoveredToolCall = (toolCall: RecoveredTextToolCall) => {
     if (currentBlock?.type === "toolCall") {
       currentBlock = null;
@@ -288,6 +291,7 @@ export async function processCompletionsStream(
       arguments: toolCall.arguments,
       partialArgs: toolCall.partialArgs,
     };
+    recoveredToolCallBlocks.add(block);
     currentBlock = block;
     appendToolCallBlock(block);
     pushStreamEvent({
@@ -329,8 +333,9 @@ export async function processCompletionsStream(
     }
     appendContentDelta({ kind: "thinking", text: "" });
   };
-  const flushReasoningTagTextPartitioner = () => {
+  const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
     const recoverUnclosed =
+      allowRecovery &&
       output.stopReason !== "length" &&
       output.stopReason !== "error" &&
       output.stopReason !== "aborted";
@@ -396,6 +401,7 @@ export async function processCompletionsStream(
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
   const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  const maxUsageTokens = { prompt: 0, completion: 0, total: 0, reasoning: 0 };
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -412,9 +418,22 @@ export async function processCompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
-    const hasReasoningUsageActivity = Boolean(
-      asPositiveFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens),
-    );
+    let hasUsageProgress = false;
+    let hasReasoningUsageActivity = false;
+    // Cumulative snapshots can repeat or regress; billing metadata is not model work.
+    for (const [counter, reported] of [
+      ["prompt", usage?.prompt_tokens],
+      ["completion", usage?.completion_tokens],
+      ["total", usage?.total_tokens],
+      ["reasoning", usage?.completion_tokens_details?.reasoning_tokens],
+    ] as const) {
+      const tokens = asPositiveFiniteNumber(reported) ?? 0;
+      if (tokens > maxUsageTokens[counter]) {
+        maxUsageTokens[counter] = tokens;
+        hasUsageProgress = true;
+        hasReasoningUsageActivity ||= counter === "reasoning";
+      }
+    }
     if (usage) {
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
@@ -425,7 +444,7 @@ export async function processCompletionsStream(
     notifyLlmRequestActivity(
       options?.signal,
       Boolean(
-        usage ||
+        hasUsageProgress ||
         choice?.finish_reason ||
         (rawChoiceDelta &&
           (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
@@ -501,7 +520,7 @@ export async function processCompletionsStream(
         // Native calls own mixed streams; emit pending raw text in its original position.
         flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
+        flushReasoningTagTextPartitioner(false);
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
@@ -603,6 +622,12 @@ export async function processCompletionsStream(
   }
   currentBlock = null;
   flushPendingPostToolCallDeltas();
+  // Native calls supersede recovered previews before any toolcall_end authorizes execution.
+  if (sawNativeToolCallDelta && recoveredToolCallBlocks.size > 0) {
+    output.content = output.content.filter(
+      (block) => block.type !== "toolCall" || !recoveredToolCallBlocks.has(block),
+    );
+  }
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
   finalizeOpenAICompletionsToolCalls(output, {
     allowSilentToolCallPromotion:

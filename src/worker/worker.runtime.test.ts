@@ -1250,7 +1250,21 @@ describe("worker runtime", () => {
           kind: "lifecycle",
           payload: { phase: "finishing", stopReason: "aborted" },
         });
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("error");
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "error",
+          expect.stringContaining("fixture inference cancelled"),
+        );
+        if (computerCleanupFailure) {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+            "error",
+            expect.stringContaining("fixture desktop cleanup failed"),
+          );
+        } else {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty(
+            "error",
+            expect.stringContaining("desktop cleanup failed"),
+          );
+        }
       } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",

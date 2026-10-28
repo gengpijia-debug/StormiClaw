@@ -25,7 +25,6 @@ import type {
 } from "./placement-store.js";
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
-import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerPlacementRedispatch } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
@@ -42,6 +41,7 @@ import {
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
+  recoverInterruptedWorkerTurn,
   resolveWorkerPlacementRuntimeOverride,
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
@@ -49,10 +49,12 @@ import {
 } from "./worker-turn-admission.js";
 import {
   failHandedOffTurn,
+  prepareWorkerTurnFailure,
   WorkerTurnExecutionError,
   WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
   type WorkerTurnEnvironmentService,
+  type WorkerTurnPartialIdentity,
 } from "./worker-turn-failure.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -72,6 +74,7 @@ type WorkerTurnLauncherOptions = {
     identity: ReturnType<typeof resolvePlacementIdentity>,
   ) => Promise<WorkerSessionWorkspace>;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
+  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
   waitForAdmissionNode: (params: {
     placement: ActiveWorkerPlacement;
     signal: AbortSignal;
@@ -85,6 +88,7 @@ type WorkerTurnLauncherOptions = {
   redispatchPlacement: WorkerPlacementRedispatch;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  persistAbandonedPartial?: (claim: WorkerTurnPartialIdentity) => Promise<void>;
 };
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
@@ -214,7 +218,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           sessionKey: identity.sessionKey,
           agentId: identity.agentId,
         });
-      let routablePlacement: WorkerSessionPlacementRecord = current;
       let assertInitialSetupCurrent: (() => void) | undefined;
       // Every admission wait retains the caller's authority, not only initial setup.
       const initialSetupSource = createDynamicSessionSourceAssertion(
@@ -250,6 +253,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         prepared.pendingResult &&
         (prepared.pendingResult.runId !== claim.runId || !current.turnClaim),
       );
+      let routablePlacement = await recoverInterruptedWorkerTurn({
+        ...options,
+        placement: current,
+        turn: inputTurn,
+        assertCurrent: assertAdmissionCurrent,
+      });
       for (;;) {
         if (routablePlacement.state === "local") {
           return await runLocalTurn();
@@ -633,9 +642,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = await findPendingWorkerWorkspaceResult(
+          const pendingWorkspaceResult = await prepareWorkerTurnFailure(
             options.placements,
-            turnClaim,
+            { ...identity, ...turnClaim },
+            handedOff && !remoteExec ? options.persistAbandonedPartial : undefined,
           );
           if (pendingWorkspaceResult) {
             if (turnClaim.owner.kind === "local") {

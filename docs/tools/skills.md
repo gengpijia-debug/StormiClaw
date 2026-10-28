@@ -541,10 +541,10 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+<ParamField path="os" type='("darwin" | "macos" | "linux" | "win32")[]'>
   Hard platform filter. When set, the skill is only eligible when the local
   host or a connected remote runtime matches a listed OS. `always` does not
-  override this filter.
+  override this filter. `macos` is accepted as an alias for `darwin`.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -619,7 +619,7 @@ metadata:
       option (brew when available, otherwise node).
     - If all installers are `download`, OpenClaw lists each entry so you can
       see all available artifacts.
-    - Specs can include `os: ["darwin"|"linux"|"win32"]` to filter by platform.
+    - Specs can include `os: ["darwin"|"macos"|"linux"|"win32"]` to filter by platform.
     - Node installs honor `skills.install.nodeManager` in `openclaw.json`
       (default: npm; options: npm / pnpm / yarn / bun). This only affects skill
       installs; the Gateway runtime should still be Node.
@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

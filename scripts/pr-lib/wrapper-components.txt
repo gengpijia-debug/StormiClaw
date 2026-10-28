@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
@@ -510,6 +511,7 @@ src/config/io.invalid-config.ts
 src/config/io.load.ts
 src/config/io.meta.ts
 src/config/io.observe-recovery-effects.ts
+src/config/io.observe-recovery-commit.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
 src/config/io.observe-suspicious.ts
@@ -590,6 +592,7 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
@@ -746,7 +749,6 @@ src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
-src/gateway/worker-environments/placement-turn-authority.receipt.ts
 src/gateway/worker-environments/placement-turn-authority.ts
 src/gateway/worker-environments/placement-workspace-journal.ts
 src/gateway/worker-environments/placement-workspace-journal.types.ts
@@ -756,6 +758,7 @@ src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
+src/gateway/worker-environments/store-errors.ts
 src/gateway/worker-environments/store-native-publication.ts
 src/gateway/worker-environments/store-projection.ts
 src/gateway/worker-environments/store-validation.ts
@@ -1078,6 +1081,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-checksum.ts
 src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
@@ -1259,6 +1263,7 @@ src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
 src/plugins/compat/model-account-connect-record.ts
+src/plugins/compat/plugin-sdk-private-runtime-export-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
@@ -1289,6 +1294,7 @@ src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry.ts
+src/plugins/doctor-migration-deferral.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
@@ -1374,6 +1380,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
@@ -1610,6 +1617,7 @@ src/shared/regexp.ts
 src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
+src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
@@ -1655,6 +1663,7 @@ src/state/openclaw-agent-db-lifecycle.ts
 src/state/openclaw-agent-db-metadata-write.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
+src/state/openclaw-agent-db-opening-refusal.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-readonly-companion.ts
@@ -1676,6 +1685,7 @@ src/state/openclaw-agent-db-session-provenance.ts
 src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
+src/state/openclaw-agent-db-validation-receipt.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
@@ -1690,6 +1700,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
+src/state/openclaw-agent-native-stop-observation.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
@@ -1737,6 +1748,7 @@ src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-initialization.ts
+src/state/openclaw-state-db-integrity.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
@@ -1804,6 +1816,7 @@ src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-owner.ts
+src/state/openclaw-state-worker-owner-get.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

@@ -35,7 +35,6 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "ttsAuto",
   "responseUsage",
   "pinnedAt",
-  "sidebarRoot",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];

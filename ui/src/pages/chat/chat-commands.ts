@@ -12,7 +12,6 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -30,7 +29,6 @@ import {
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
-import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import type { ChatExportResult } from "./export.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
@@ -89,20 +87,12 @@ export function requireChatSessionAction(
   host: ChatCommandHost,
   action: "abort" | "compact" | "reset",
 ): boolean {
-  const access = readChatSessionActionAccess(
-    currentSessionAccessSnapshot(host),
-    Boolean(host.chatRunId),
-    {
-      session: host.sessionsResult?.sessions.find((row) =>
-        visibleSessionMatches(
-          host,
-          row.key,
-          row.agentId ?? host.sessionsResultAgentId ?? undefined,
-        ),
-      ),
-      sessionAbortable: host.chatRunSessionAbortable === true,
-    },
-  )[action];
+  // Typed Stop is session-scoped, so it needs sessions.abort even while a run is local.
+  const access = readChatSessionActionAccess(currentSessionAccessSnapshot(host), false, {
+    session: host.sessionsResult?.sessions.find((row) =>
+      visibleSessionMatches(host, row.key, row.agentId ?? host.sessionsResultAgentId ?? undefined),
+    ),
+  })[action];
   if (access.allowed) {
     return true;
   }
@@ -317,7 +307,7 @@ export async function dispatchChatSlashCommand(
       if (!requireChatSessionAction(host, "abort")) {
         return "failed";
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return "completed";
     case "new":
       if (!host.createChatSession) {
@@ -421,19 +411,6 @@ export async function dispatchChatSlashCommand(
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
     host.chatSending = false;
-  }
-
-  if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
-    enqueuePendingRunMessage(
-      host,
-      `/${name} ${args}`.trim(),
-      host.chatRunId,
-      resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser) ?? undefined,
-    );
-  }
-
-  if (result.modelChanged && targetIsCurrent()) {
-    await host.refreshCurrentSessionTools?.();
   }
 
   if (result.action === "refresh" && targetIsCurrent()) {

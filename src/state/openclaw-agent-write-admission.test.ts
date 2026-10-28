@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -24,6 +27,70 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  { count: 773, outcome: "ok" },
+  { count: 5_000, outcome: "error" },
+] as const)(
+  "reserves $count agents without overflowing and preserves $outcome settlement",
+  async ({ count, outcome }) => {
+    const root = tempDirs.make("openclaw-fleet-admission-");
+    const options = Array.from({ length: count }, (_, index) => ({
+      agentId: `agent-${index}`,
+      path: path.join(root, `${String(index).padStart(4, "0")}.sqlite`),
+    }));
+    const first = expectDefined(options[0], "first database");
+    const last = expectDefined(options.at(-1), "last database");
+    const caller = new AsyncLocalStorage<string>();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new Error("fleet read failed");
+    const order: string[] = [];
+    const batch = caller.run("fleet-reader", () =>
+      runOpenClawAgentWriteAdmissions(options, async () => {
+        expect(caller.getStore()).toBe("fleet-reader");
+        await runOpenClawAgentWriteAdmission(first, () => order.push("reentrant"), true);
+        entered.resolve();
+        await release.promise;
+        order.push("settled");
+        if (outcome === "error") {
+          throw failure;
+        }
+        return "read complete";
+      }),
+    );
+    const observed = batch.then(
+      (value) => value,
+      (error: unknown) => error,
+    );
+    const follower = runOpenClawAgentWriteAdmission(last, () => order.push("follower"));
+    try {
+      await awaitGateBeforeSettlement(entered.promise, batch, "Fleet read did not enter");
+      expect(order).toEqual(["reentrant"]);
+      release.resolve();
+      expect(await observed).toBe(outcome === "error" ? failure : "read complete");
+      await follower;
+      expect(order).toEqual(["reentrant", "settled", "follower"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([batch, follower]);
+    }
+  },
+);
+
+it("releases earlier reservations when a later database path is invalid", async () => {
+  const root = tempDirs.make("openclaw-partial-admission-");
+  const first = { agentId: "first", path: path.join(root, "a.sqlite") };
+  const invalid = { agentId: "invalid", path: path.join(root, "z.sqlite") };
+  fs.mkdirSync(invalid.path);
+  const run = vi.fn();
+  const batch = runOpenClawAgentWriteAdmissions([first, invalid], run);
+  const rejected = expect(batch).rejects.toThrow("must identify a regular file");
+  const follower = runOpenClawAgentWriteAdmission(first, () => "released");
+  await rejected;
+  expect(run).not.toHaveBeenCalled();
+  expect(await follower).toBe("released");
+});
 
 function fixture() {
   const root = tempDirs.make("openclaw-reservation-diagnostic-");
@@ -166,6 +233,45 @@ it.each(["file", "ephemeral"] as const)(
       release.resolve();
       await Promise.allSettled([first, next]);
     }
+  },
+);
+
+it.each(["symlink", "hardlink"] as const)(
+  "borrows one foreground admission for %s aliases without admitting a worker reservation",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-batch-alias-");
+    const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
+    fs.writeFileSync(options.path, "database");
+    const aliasDirectory = path.join(root, "alias");
+    const alias = {
+      ...options,
+      path:
+        kind === "symlink"
+          ? path.join(aliasDirectory, path.basename(options.path))
+          : path.join(root, "alias.sqlite"),
+    };
+    if (kind === "symlink") {
+      fs.symlinkSync(root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.linkSync(options.path, alias.path);
+    }
+    await runOpenClawAgentWriteAdmission(options, async () => {
+      expect(
+        await runOpenClawAgentWriteAdmissions([alias, options], () => "read complete", true),
+      ).toBe("read complete");
+    });
+    await runOpenClawAgentWorkerWrite(options, async () => {
+      await expect(
+        runOpenClawAgentWriteAdmissions([alias, options], () => "unsafe read", true),
+      ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+    });
+    const distinct = { ...options, path: path.join(root, "distinct.sqlite") };
+    fs.writeFileSync(distinct.path, "other database");
+    await runOpenClawAgentWriteAdmission(options, async () => {
+      await expect(
+        runOpenClawAgentWriteAdmissions([options, distinct], () => "unsafe read", true),
+      ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+    });
   },
 );
 
