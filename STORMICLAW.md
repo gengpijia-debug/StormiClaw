@@ -1,8 +1,8 @@
 # StormiClaw distribution
 
-Version: `2026.10.8+stormi.1`.
-Upstream baseline: OpenClaw `v2026.10.8`, commit
-`dc2523e5a5c7a309517fd7fa834add938231d526`.
+Version: `2026.10.9+stormi.1`.
+Upstream baseline: OpenClaw `v2026.10.9`, commit
+`8b18b5578f66eab1501cba4cef2310d88bfb9a41`.
 
 ## Ownership and compatibility
 
@@ -22,6 +22,19 @@ visibility is managed separately.
   retired; a missing credential produces the provider's actual setup error.
 - Preserve existing user configuration, credentials, conversations, and workspaces
   in their standard OpenClaw locations. Never commit them to this repository.
+
+## Upstream review policy
+
+Pin each upstream release and review its complete source and dependency delta
+before execution. Check network destinations, telemetry, credential access,
+uploads, install hooks, and dependency download sources. Do not enable new
+external integrations or upload local configuration, credentials, conversations,
+backups, or diagnostics as part of an upgrade. Existing operator-configured
+provider and channel connections retain their configured behavior.
+
+Static review reduces risk; it does not establish that every dependency or
+future agent action is harmless. Keep the reviewed source identity and local
+verification evidence with the upgrade backup, outside this public repository.
 
 ## Build from source
 

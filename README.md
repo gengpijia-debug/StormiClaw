@@ -2,8 +2,8 @@
 
 Personal source distribution maintained at
 [gengpijia-debug/StormiClaw](https://github.com/gengpijia-debug/StormiClaw).
-This build is `2026.10.8+stormi.1`, based on OpenClaw `v2026.10.8`
-(`dc2523e5a5c7a309517fd7fa834add938231d526`).
+This build is `2026.10.9+stormi.1`, based on OpenClaw `v2026.10.9`
+(`8b18b5578f66eab1501cba4cef2310d88bfb9a41`).
 
 Use the `stormiclaw` command; `openclaw` remains available for SDK and plugin
 compatibility. Updates from this source installation follow this repository's
