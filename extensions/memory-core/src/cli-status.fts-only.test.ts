@@ -4,14 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 
-vi.mock("./memory/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./memory/index.js")>()),
-  getMemorySearchManager,
-}));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig: () => ({}),
-  resolveDefaultAgentId: () => "main",
+// mock-isolation: exercise CLI output without opening a native SQLite memory manager.
+vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => ({
+    agents: { entries: { main: {} } },
+    memory: { search: { provider: "none" } },
+  }),
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),

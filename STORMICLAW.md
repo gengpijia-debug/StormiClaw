@@ -1,8 +1,8 @@
 # StormiClaw distribution
 
-Version: `2026.10.9+stormi.1`.
-Upstream baseline: OpenClaw `v2026.10.9`, commit
-`8b18b5578f66eab1501cba4cef2310d88bfb9a41`.
+Version: `2026.11.2+stormi.1`.
+Upstream baseline: OpenClaw `v2026.11.2`, commit
+`b556fdf457b026574bf0f1e7b4914b15f3f179ce`.
 
 ## Ownership and compatibility
 
@@ -63,5 +63,5 @@ updater, preserving verified state backups until runtime acceptance.
 
 Verify with `stormiclaw --version`, `stormiclaw gateway status --deep`,
 `stormiclaw health`, and `stormiclaw memory status --agent main`. Confirm the
-configured channel connects and a real OpenAI turn completes. Provider-backed
+configured channel connects and a real configured-model turn completes. Provider-backed
 checks can incur the account's normal inference usage.
