@@ -2,6 +2,7 @@
 // provider-portable schema shape.
 import { describe, expect, it } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
+import { resolveHeartbeatResponseTool } from "./heartbeat-response-tool.js";
 import { createHeartbeatResponseTool } from "./heartbeat-response-tool.test-support.js";
 
 function readSchemaProperty(schema: unknown, key: string): Record<string, unknown> {
@@ -25,6 +26,20 @@ type HeartbeatResponseDetails = {
 };
 
 describe("createHeartbeatResponseTool", () => {
+  it("rejects an advertised response tool outside a heartbeat run", async () => {
+    const tool = resolveHeartbeatResponseTool({ offerHeartbeatTool: true });
+    if (!tool) {
+      throw new Error("Expected the advertised heartbeat tool");
+    }
+    await expect(
+      tool.execute("ordinary-turn", {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      }),
+    ).rejects.toThrow("heartbeat_respond is only accepted during a heartbeat run");
+  });
+
   it("uses flat enum schemas for provider portability", () => {
     // Some providers reject anyOf literal unions in tool schemas; flat enums are
     // the portable contract for heartbeat status fields.

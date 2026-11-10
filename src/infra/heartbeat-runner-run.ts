@@ -227,6 +227,8 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
           {
             isHeartbeat: true,
+            // Text-reply heartbeats may use the same structured response as tool-reply heartbeats.
+            enableHeartbeatTool: true,
             useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
             requireExplicitMessageTarget: !internalSource,
             // Isolated heartbeats mint a fresh session ID per run, so nothing later
@@ -241,7 +243,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
             heartbeatModelOverride: heartbeat?.model?.trim(),
             ...(prepared.usesHeartbeatResponseTool
               ? {
-                  enableHeartbeatTool: true,
                   forceHeartbeatTool: true,
                   sourceReplyDeliveryMode: "message_tool_only",
                 }

@@ -1,6 +1,6 @@
 # StormiClaw distribution
 
-Version: `2026.11.2+stormi.1`.
+Version: `2026.11.2+stormi.2`.
 Upstream baseline: OpenClaw `v2026.11.2`, commit
 `b556fdf457b026574bf0f1e7b4914b15f3f179ce`.
 
@@ -15,6 +15,8 @@ visibility is managed separately.
 
 ## Local behavior
 
+- Accept structured heartbeat responses during text-reply heartbeat runs, while
+  preserving the rejection of response-tool calls outside heartbeat runs.
 - Retain keyword-only memory search when `memory.search.provider` is `none`,
   including the explicit transition from an embedding-backed index.
 - Report disabled embeddings clearly in keyword-only memory status.

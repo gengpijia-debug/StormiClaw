@@ -4,7 +4,14 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../agents/failover/user-copy.js";
-import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  resolveHeartbeatResponseTool,
+  resolveHeartbeatTools,
+} from "../agents/tools/heartbeat-response-tool.js";
+import {
+  createHeartbeatToolResponsePayload,
+  normalizeHeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -143,6 +150,52 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce heartbeat response tool", () => {
+  it.each([undefined, "automatic" as const])(
+    "accepts a quiet response tool in a text-reply heartbeat (%s)",
+    async (visibleReplies) => {
+      await withHeartbeat(
+        async ({ cfg, replySpy, run, sendTelegram }) => {
+          replySpy.mockImplementationOnce(async (ctx, options) => {
+            const tool = resolveHeartbeatResponseTool(
+              resolveHeartbeatTools(
+                {
+                  config: cfg,
+                  trigger: ctx.InternalTurnSource,
+                  enableHeartbeatTool: options?.enableHeartbeatTool,
+                  forceHeartbeatTool: options?.forceHeartbeatTool,
+                },
+                "main",
+              ),
+            );
+            if (!tool) {
+              throw new Error("Heartbeat response tool unavailable");
+            }
+            const result = await tool.execute("quiet-heartbeat", {
+              outcome: "no_change",
+              notify: false,
+              summary: "Nothing needs attention.",
+            });
+            const response = normalizeHeartbeatToolResponse(result.details);
+            if (!response) {
+              throw new Error("Heartbeat response was not accepted");
+            }
+            return createHeartbeatToolResponsePayload(response);
+          });
+          expect((await run()).status).toBe("ran");
+          expectQuiet(sendTelegram);
+        },
+        {
+          messages: visibleReplies ? { visibleReplies } : undefined,
+          session: {
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            agentRuntimeOverride: "openclaw",
+          },
+        },
+      );
+    },
+  );
+
   it("commits private monitor scratch without delivering it", async () => {
     await withHeartbeat(async ({ sessionKey, storePath, replySpy, run, sendTelegram }) => {
       const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
