@@ -1,6 +1,6 @@
 # StormiClaw distribution
 
-Version: `2026.11.2+stormi.2`.
+Version: `2026.11.2+stormi.3`.
 Upstream baseline: OpenClaw `v2026.11.2`, commit
 `b556fdf457b026574bf0f1e7b4914b15f3f179ce`.
 
@@ -14,6 +14,9 @@ The root package is private to prevent accidental npm publication; GitHub source
 visibility is managed separately.
 
 ## Local behavior
+
+- Stop immediate same-model retries when the provider reports exhausted workspace
+  API usage limits; retain transient-throttle recovery.
 
 - Accept structured heartbeat responses during text-reply heartbeat runs, while
   preserving the rejection of response-tool calls outside heartbeat runs.

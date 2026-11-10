@@ -276,8 +276,10 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
   });
 
-  it("leaves exhausted usage windows to profile failover", async () => {
-    const message = "429 daily request limit reached";
+  it.each([
+    "429 daily request limit reached",
+    '400: {"error":{"message":"You have reached your specified workspace API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.","type":"invalid_request_error"},"type":"error"}',
+  ])("leaves exhausted usage windows to profile failover: %s", async (message) => {
     const controller = createController(vi.fn(async () => false));
     const onRetry = vi.fn();
     await expect(
